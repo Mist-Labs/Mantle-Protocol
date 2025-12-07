@@ -25,6 +25,7 @@ contract PrivateIntentPool is ReentrancyGuard {
     mapping(bytes32 => Intent) public intents;
     mapping(bytes32 => bool) public commitments;
     mapping(uint32 => bytes32) public destChainRoots;
+    mapping(bytes32 => address) public intentSolvers; 
 
     IPoseidonHasher poseidonHasher;
     address public immutable RELAYER;
@@ -53,6 +54,7 @@ contract PrivateIntentPool is ReentrancyGuard {
     error Unauthorized();
     error TransferFailed();
     error InvalidCommitment();
+    error RootNotSynced();
 
     constructor(
         address _relayer,
@@ -111,29 +113,41 @@ contract PrivateIntentPool is ReentrancyGuard {
 
     /**
      * @notice Mark intent as filled after cross-chain verification
+     * @dev Any solver can call this function - first valid proof wins
+     * @param intentId The unique identifier of the intent
+     * @param merkleProof Merkle proof showing intent was fulfilled on destination chain
+     * @param leafIndex Position of the leaf in the Merkle tree
      */
     function markFilled(
         bytes32 intentId,
-        address solver,
-        bytes32 destRoot,
         bytes32[] calldata merkleProof,
         uint256 leafIndex
-    ) external {
-        if (msg.sender != RELAYER) revert Unauthorized();
+    ) external nonReentrant {
+        address solver = msg.sender;
 
         Intent storage intent = intents[intentId];
+
+        // Validate intent exists and is still active
         if (intent.commitment == bytes32(0)) revert IntentNotFound();
         if (intent.filled || intent.refunded) revert IntentAlreadyFilled();
 
+        // Get the synced root for the destination chain
+        bytes32 destRoot = destChainRoots[intent.destChain];
+        if (destRoot == bytes32(0)) revert RootNotSynced();
+
+        // Verify Merkle proof that intent was fulfilled on destination chain
         if (!_verifyMerkleProof(intentId, destRoot, merkleProof, leafIndex)) {
             revert InvalidCommitment();
         }
 
+        // Mark intent as filled and record the solver
         intent.filled = true;
+        intentSolvers[intentId] = solver;
 
         uint256 fee = (intent.amount * FEE_BPS) / 10000;
         uint256 solverAmount = intent.amount - fee;
 
+        // Transfer tokens to solver
         if (!IERC20(intent.token).transfer(solver, solverAmount)) {
             revert TransferFailed();
         }
@@ -193,11 +207,11 @@ contract PrivateIntentPool is ReentrancyGuard {
         bytes32[] calldata proof,
         uint256 index
     ) internal pure returns (bool) {
-        bytes32 computedHash = leaf; 
+        bytes32 computedHash = leaf;
 
         for (uint256 i = 0; i < proof.length; i++) {
             bytes32 proofElement = proof[i];
-            computedHash = _hashPair(computedHash, proofElement); 
+            computedHash = _hashPair(computedHash, proofElement);
             index = index / 2;
         }
 
@@ -214,5 +228,9 @@ contract PrivateIntentPool is ReentrancyGuard {
 
     function getDestChainRoot(uint32 chainId) external view returns (bytes32) {
         return destChainRoots[chainId];
+    }
+
+    function getSolver(bytes32 intentId) external view returns (address) {
+        return intentSolvers[intentId];
     }
 }

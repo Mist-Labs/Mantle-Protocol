@@ -285,17 +285,20 @@ contract PrivateIntentPoolTest is Test {
         // Create merkle proof - single element tree, no siblings needed
         bytes32[] memory proof = new bytes32[](0);
         
-        // Mark as filled
-        vm.startPrank(relayer);
+        // Solver claims the reward
+        vm.startPrank(solver);
         vm.expectEmit(true, true, false, false);
         emit IntentFilled(intentId, solver);
         
-        pool.markFilled(intentId, solver, destRoot, proof, 0);
+        pool.markFilled(intentId, proof, 0);
         vm.stopPrank();
         
         // Verify intent marked as filled
         PrivateIntentPool.Intent memory intent = pool.getIntent(intentId);
         assertTrue(intent.filled);
+        
+        // Verify solver was recorded
+        assertEq(pool.getSolver(intentId), solver);
         
         // Verify tokens transferred to solver (minus fee)
         uint256 fee = (TEST_AMOUNT * pool.FEE_BPS()) / 10000;
@@ -304,7 +307,7 @@ contract PrivateIntentPoolTest is Test {
         assertEq(token.balanceOf(feeCollector), fee);
     }
     
-    function test_RevertWhen_MarkFilled_Unauthorized() public {
+    function test_RevertWhen_MarkFilled_RootNotSynced() public {
         vm.prank(relayer);
         pool.createIntent(
             intentId,
@@ -317,24 +320,21 @@ contract PrivateIntentPoolTest is Test {
             nullifier
         );
         
-        bytes32 destRoot = keccak256("destRoot");
-        bytes32[] memory proof = new bytes32[](1);
-        proof[0] = intentId;
+        // Don't sync root
+        bytes32[] memory proof = new bytes32[](0);
         
-        vm.prank(user); // Not relayer
-        vm.expectRevert(PrivateIntentPool.Unauthorized.selector);
-        pool.markFilled(intentId, solver, destRoot, proof, 0);
+        vm.prank(solver);
+        vm.expectRevert(PrivateIntentPool.RootNotSynced.selector);
+        pool.markFilled(intentId, proof, 0);
     }
     
     function test_RevertWhen_MarkFilled_IntentNotFound() public {
         bytes32 nonExistentId = keccak256("nonexistent");
-        bytes32 destRoot = keccak256("destRoot");
-        bytes32[] memory proof = new bytes32[](1);
-        proof[0] = nonExistentId;
+        bytes32[] memory proof = new bytes32[](0);
         
-        vm.prank(relayer);
+        vm.prank(solver);
         vm.expectRevert(PrivateIntentPool.IntentNotFound.selector);
-        pool.markFilled(nonExistentId, solver, destRoot, proof, 0);
+        pool.markFilled(nonExistentId, proof, 0);
     }
     
     function test_RevertWhen_MarkFilled_AlreadyFilled() public {
@@ -358,13 +358,14 @@ contract PrivateIntentPoolTest is Test {
         
         bytes32[] memory proof = new bytes32[](0);
         
-        vm.prank(relayer);
-        pool.markFilled(intentId, solver, destRoot, proof, 0);
+        vm.prank(solver);
+        pool.markFilled(intentId, proof, 0);
         
-        // Try to fill again
-        vm.prank(relayer);
+        // Try to fill again (different solver)
+        address solver2 = makeAddr("solver2");
+        vm.prank(solver2);
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        pool.markFilled(intentId, solver, destRoot, proof, 0);
+        pool.markFilled(intentId, proof, 0);
     }
     
     function test_RevertWhen_MarkFilled_InvalidProof() public {
@@ -388,9 +389,45 @@ contract PrivateIntentPoolTest is Test {
         bytes32[] memory invalidProof = new bytes32[](1);
         invalidProof[0] = keccak256("invalid");
         
-        vm.prank(relayer);
+        vm.prank(solver);
         vm.expectRevert(PrivateIntentPool.InvalidCommitment.selector);
-        pool.markFilled(intentId, solver, destRoot, invalidProof, 0);
+        pool.markFilled(intentId, invalidProof, 0);
+    }
+    
+    function test_MarkFilled_CompetingSolvers() public {
+        // Create intent
+        vm.prank(relayer);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            DEST_CHAIN,
+            user,
+            secret,
+            nullifier
+        );
+        
+        // Sync root
+        bytes32 destRoot = intentId;
+        vm.prank(relayer);
+        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        
+        bytes32[] memory proof = new bytes32[](0);
+        
+        // First solver wins
+        address solver1 = makeAddr("solver1");
+        vm.prank(solver1);
+        pool.markFilled(intentId, proof, 0);
+        
+        // Verify first solver won
+        assertEq(pool.getSolver(intentId), solver1);
+        
+        // Second solver loses
+        address solver2 = makeAddr("solver2");
+        vm.prank(solver2);
+        vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
+        pool.markFilled(intentId, proof, 0);
     }
     
     // ========== REFUND TESTS ==========
@@ -464,8 +501,8 @@ contract PrivateIntentPoolTest is Test {
         
         bytes32[] memory proof = new bytes32[](0);
         
-        vm.prank(relayer);
-        pool.markFilled(intentId, solver, destRoot, proof, 0);
+        vm.prank(solver);
+        pool.markFilled(intentId, proof, 0);
         
         // Fast forward and try to refund
         vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
@@ -668,9 +705,9 @@ contract PrivateIntentPoolTest is Test {
         
         bytes32[] memory proof = new bytes32[](0);
         
-        vm.startPrank(relayer);
+        vm.startPrank(solver);
         uint256 gasBefore = gasleft();
-        pool.markFilled(intentId, solver, destRoot, proof, 0);
+        pool.markFilled(intentId, proof, 0);
         uint256 gasUsed = gasBefore - gasleft();
         
         console.log("Gas used for markFilled:", gasUsed);

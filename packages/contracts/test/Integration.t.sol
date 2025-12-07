@@ -115,11 +115,11 @@ contract IntegrationTest is Test {
         vm.prank(relayer);
         intentPool.syncDestChainRoot(DEST_CHAIN, destRoot);
         
-        // 6. RELAYER: Mark intent as filled on source chain
+        // 6. SOLVER: Claim reward by marking intent as filled on source chain
         bytes32[] memory destProof = settlement.generateFillProof(intentId);
         
-        vm.prank(relayer);
-        intentPool.markFilled(intentId, solver, destRoot, destProof, 0);
+        vm.prank(solver);
+        intentPool.markFilled(intentId, destProof, 0);
         
         // Verify solver received repayment on source chain
         // Solver paid 1 ether on destination, got back (1 ether - poolFee) on source
@@ -128,6 +128,9 @@ contract IntegrationTest is Test {
         // Net position: started with 1000, spent 1 on dest, got back (1 - poolFee) on source
         // = 1000 - 1 + (1 - poolFee) = 1000 - poolFee
         assertEq(token.balanceOf(solver), 1000 ether - poolFee);
+        
+        // Verify solver was recorded
+        assertEq(intentPool.getSolver(intentId), solver);
         
         // 7. USER: Claim withdrawal on destination chain
         bytes32 authHash = keccak256(
@@ -421,15 +424,15 @@ contract IntegrationTest is Test {
         vm.warp(block.timestamp + intentPool.INTENT_TIMEOUT() + 1);
         intentPool.refund(intentId);
         
-        bytes32 destRoot = keccak256(abi.encodePacked(intentId));
+        bytes32 destRoot = intentId;
         vm.prank(relayer);
         intentPool.syncDestChainRoot(DEST_CHAIN, destRoot);
         
         bytes32[] memory proof = new bytes32[](0);
         
-        vm.prank(relayer);
+        vm.prank(solver);
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        intentPool.markFilled(intentId, solver, destRoot, proof, 0);
+        intentPool.markFilled(intentId, proof, 0);
     }
     
     // ========== STRESS TESTS ==========
@@ -525,13 +528,14 @@ contract IntegrationTest is Test {
         uint256 poolBalance = token.balanceOf(address(intentPool));
         
         address attacker = makeAddr("attacker");
+        
+        // Attacker tries to claim without synced root
         vm.startPrank(attacker);
         
-        bytes32 destRoot = keccak256("root");
         bytes32[] memory proof = new bytes32[](0);
         
-        vm.expectRevert(PrivateIntentPool.Unauthorized.selector);
-        intentPool.markFilled(intentId, attacker, destRoot, proof, 0);
+        vm.expectRevert(PrivateIntentPool.RootNotSynced.selector);
+        intentPool.markFilled(intentId, proof, 0);
         
         vm.stopPrank();
         
@@ -563,6 +567,53 @@ contract IntegrationTest is Test {
         );
         
         assertTrue(true);
+    }
+    
+    function test_Security_MultipleSolversCompete() public {
+        bytes32 secret = keccak256("secret");
+        bytes32 nullifier = keccak256("nullifier");
+        bytes32[4] memory inputs = [
+            secret,
+            nullifier,
+            bytes32(TEST_AMOUNT),
+            bytes32(uint256(DEST_CHAIN))
+        ];
+        bytes32 commitment = poseidon.poseidon(inputs);
+        bytes32 intentId = keccak256("intent");
+        
+        // Create intent
+        vm.prank(relayer);
+        intentPool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            DEST_CHAIN,
+            user,
+            secret,
+            nullifier
+        );
+        
+        // Sync root
+        bytes32 destRoot = intentId;
+        vm.prank(relayer);
+        intentPool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        
+        bytes32[] memory proof = new bytes32[](0);
+        
+        // First solver wins
+        address solver1 = makeAddr("solver1");
+        vm.prank(solver1);
+        intentPool.markFilled(intentId, proof, 0);
+        
+        // Second solver fails
+        address solver2 = makeAddr("solver2");
+        vm.prank(solver2);
+        vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
+        intentPool.markFilled(intentId, proof, 0);
+        
+        // Verify first solver got the reward
+        assertEq(intentPool.getSolver(intentId), solver1);
     }
     
     // ========== GAS BENCHMARKS ==========
@@ -624,8 +675,8 @@ contract IntegrationTest is Test {
         bytes32[] memory fillProof = settlement.generateFillProof(intentId);
         
         gasStart = gasleft();
-        vm.prank(relayer);
-        intentPool.markFilled(intentId, solver, destRoot, fillProof, 0);
+        vm.prank(solver);
+        intentPool.markFilled(intentId, fillProof, 0);
         console.log("Gas for markFilled:", gasStart - gasleft());
     }
 }
