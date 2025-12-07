@@ -1,0 +1,16 @@
+{
+  "name": "@mantle/contracts",
+  "version": "1.0.0",
+  "description": "Foundry workspace for Mantle smart contracts.",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "compile": "forge build", 
+    "test": "forge test",     
+    "lint": "solhint 'src/**/*.sol'"
+  },
+  "devDependencies": {
+    "solhint": "^4.1.1",
+    "ts-node": "^10.9.2"
+  }
+}

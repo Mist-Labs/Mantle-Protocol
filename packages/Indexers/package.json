@@ -1,0 +1,8 @@
+{
+  "name": "indexer",
+  "version": "1.0.0",
+  "description": "Ethereum & Mantle indexers",
+  "main": "index.js",
+  "author": "Mist-Labs",
+  "license": "MIT"
+}

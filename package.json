@@ -1,0 +1,16 @@
+{
+  "name": "Mantle",
+  "version": "1.0.0",
+  "description": "Mantle protocol workspace",
+  "private": true,
+  "main": "index.js",
+  "repository": "https://github.com/OkoliEvans/Mantle.git",
+  "author": "Mist-Labs",
+  "license": "MIT",
+  "scripts": {
+    "dev": "echo 'Run specific package scripts: yarn workspace <name> <script>'"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}
