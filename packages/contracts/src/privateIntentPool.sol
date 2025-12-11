@@ -2,7 +2,9 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuard
+} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IPoseidonHasher} from "./interface.sol";
 
 /**
@@ -25,7 +27,7 @@ contract PrivateIntentPool is ReentrancyGuard {
     mapping(bytes32 => Intent) public intents;
     mapping(bytes32 => bool) public commitments;
     mapping(uint32 => bytes32) public destChainRoots;
-    mapping(bytes32 => address) public intentSolvers; 
+    mapping(bytes32 => address) public intentSolvers;
 
     IPoseidonHasher poseidonHasher;
     address public immutable RELAYER;
@@ -192,9 +194,10 @@ contract PrivateIntentPool is ReentrancyGuard {
      * @dev Matches PrivateSettlement's hashing for compatibility
      */
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
-        return a < b
-            ? keccak256(abi.encodePacked(a, b))
-            : keccak256(abi.encodePacked(b, a));
+        return
+            a < b
+                ? keccak256(abi.encodePacked(a, b))
+                : keccak256(abi.encodePacked(b, a));
     }
 
     /**

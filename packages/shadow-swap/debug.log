@@ -1,0 +1,540 @@
+warning: virtual workspace defaulting to `resolver = "1"` despite one or more workspace members being on edition 2024 which implies `resolver = "3"`
+note: to keep the current resolver, specify `workspace.resolver = "1"` in the workspace root's manifest
+note: to use the edition 2024 resolver, specify `workspace.resolver = "3"` in the workspace root's manifest
+note: for more details see https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions
+warning: unnecessary parentheses around type
+   --> packages/shadow-swap/src/merkle_manager/merkletreemanager.rs:248:75
+    |
+248 |     pub async fn generate_mantle_proof(&self, commitment: &str) -> Result<(MerkleProof)> {
+    |                                                                           ^           ^
+    |
+    = note: `#[warn(unused_parens)]` on by default
+help: remove these parentheses
+    |
+248 -     pub async fn generate_mantle_proof(&self, commitment: &str) -> Result<(MerkleProof)> {
+248 +     pub async fn generate_mantle_proof(&self, commitment: &str) -> Result<MerkleProof> {
+    |
+
+warning: unused variable: `dest_root`
+   --> packages/shadow-swap/src/relay_coordinator/relay_coordinator.rs:667:13
+    |
+667 |         let dest_root = self.mantle_relayer.get_merkle_root().await?;
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_dest_root`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `dest_root`
+   --> packages/shadow-swap/src/relay_coordinator/relay_coordinator.rs:718:13
+    |
+718 |         let dest_root = self.ethereum_relayer.get_merkle_root().await?;
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_dest_root`
+
+warning: unused variable: `intent_id`
+   --> packages/shadow-swap/src/relay_coordinator/secret_monitor.rs:139:9
+    |
+139 |         intent_id: &str,
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_intent_id`
+
+warning: unused variable: `intent_id`
+   --> packages/shadow-swap/src/relay_coordinator/secret_monitor.rs:278:9
+    |
+278 |         intent_id: &str,
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_intent_id`
+
+warning: unused variable: `conn`
+   --> packages/shadow-swap/src/database/database.rs:984:17
+    |
+984 |         let mut conn = self.get_connection()?;
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: variable does not need to be mutable
+   --> packages/shadow-swap/src/database/database.rs:984:13
+    |
+984 |         let mut conn = self.get_connection()?;
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: field `timestamp` is never read
+  --> packages/shadow-swap/src/api/model.rs:61:9
+   |
+56 | pub struct IndexerEventRequest {
+   |            ------------------- field in this struct
+...
+61 |     pub timestamp: i64,
+   |         ^^^^^^^^^
+   |
+   = note: `IndexerEventRequest` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: multiple fields are never read
+   --> packages/shadow-swap/src/database/model.rs:120:9
+    |
+119 | pub struct DbBridgeEvent {
+    |            ------------- fields in this struct
+120 |     pub id: i32,
+    |         ^^
+121 |     pub event_id: String,
+    |         ^^^^^^^^
+122 |     pub intent_id: Option<String>,
+    |         ^^^^^^^^^
+123 |     pub event_type: String,
+    |         ^^^^^^^^^^
+124 |     pub event_data: serde_json::Value,
+125 |     pub chain_id: i32,
+    |         ^^^^^^^^
+126 |     pub block_number: i64,
+127 |     pub transaction_hash: String,
+    |         ^^^^^^^^^^^^^^^^
+128 |     pub timestamp: DateTime<Utc>,
+    |         ^^^^^^^^^
+129 |     pub created_at: DateTime<Utc>,
+    |         ^^^^^^^^^^
+    |
+    = note: `DbBridgeEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `DbIndexerCheckpoint` is never constructed
+   --> packages/shadow-swap/src/database/model.rs:151:12
+    |
+151 | pub struct DbIndexerCheckpoint {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_test_mantle_config` is never used
+   --> packages/shadow-swap/src/merkle_manager/merkletreemanager.rs:403:4
+    |
+403 | fn create_test_mantle_config() -> crate::relay_coordinator::model::MantleConfig {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_test_ethereum_config` is never used
+   --> packages/shadow-swap/src/merkle_manager/merkletreemanager.rs:415:4
+    |
+415 | fn create_test_ethereum_config() -> crate::relay_coordinator::model::EthereumConfig {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `setup_test_manager` is never used
+   --> packages/shadow-swap/src/merkle_manager/merkletreemanager.rs:427:10
+    |
+427 | async fn setup_test_manager() -> MerkleTreeManager {
+    |          ^^^^^^^^^^^^^^^^^^
+
+warning: struct `DbMerkleNode` is never constructed
+ --> packages/shadow-swap/src/merkle_manager/model.rs:4:12
+  |
+4 | pub struct DbMerkleNode {
+  |            ^^^^^^^^^^^^
+
+warning: struct `DbMerkleRoot` is never constructed
+  --> packages/shadow-swap/src/merkle_manager/model.rs:13:12
+   |
+13 | pub struct DbMerkleRoot {
+   |            ^^^^^^^^^^^^
+
+warning: methods `sync_dest_chain_root`, `fill_intent`, `claim_withdrawal`, `mark_filled`, and `refund_intent` are never used
+  --> packages/shadow-swap/src/models/traits.rs:10:8
+   |
+3  | pub trait ChainRelayer: Send + Sync {
+   |           ------------ methods in this trait
+...
+10 |     fn sync_dest_chain_root(
+   |        ^^^^^^^^^^^^^^^^^^^^
+...
+15 |     fn fill_intent(
+   |        ^^^^^^^^^^^
+...
+26 |     fn claim_withdrawal(
+   |        ^^^^^^^^^^^^^^^^
+...
+34 |     fn mark_filled(
+   |        ^^^^^^^^^^^
+...
+40 |     fn refund_intent(
+   |        ^^^^^^^^^^^^^
+
+warning: `shadow-swap` (bin "shadow-swap") generated 16 warnings (run `cargo fix --bin "shadow-swap"` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running `/Users/MAC/Ethereum-EVM/Mantle/target/debug/shadow-swap`
+[2m2025-12-11T13:54:04.687202Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🚀 Starting Mantle Bridge Relayer
+[2m2025-12-11T13:54:04.741249Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 📊 Running database migrations
+[2m2025-12-11T13:54:04.741301Z[0m [32m INFO[0m [2mshadow_swap::database::database[0m[2m:[0m RUNNING MIGRATIONS....
+[2m2025-12-11T13:54:04.743944Z[0m [32m INFO[0m [2mshadow_swap::database::database[0m[2m:[0m MIGRATIONS COMPLETED....
+[2m2025-12-11T13:54:04.743977Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 💱 Initializing price feeds
+[2m2025-12-11T13:54:04.747734Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 📈 Starting ETH<->MNT price feeds
+[2m2025-12-11T13:54:04.747775Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 🔄 Initializing price feeds for all token pairs
+[2m2025-12-11T13:54:04.747806Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 📊 Initializing price feed: ETH-USD
+[2m2025-12-11T13:54:04.748935Z[0m [34mDEBUG[0m [2mreqwest::connect[0m[2m:[0m starting new connection: https://min-api.cryptocompare.com/
+[2m2025-12-11T13:54:04.751578Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::connect::http[0m[2m:[0m connecting to 20.4.130.154:443
+[2m2025-12-11T13:54:04.941207Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::connect::http[0m[2m:[0m connected to 20.4.130.154:443
+[2m2025-12-11T13:54:05.538655Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:05.539890Z[0m [34mDEBUG[0m [2mreqwest::connect[0m[2m:[0m starting new connection: https://api.coingecko.com/
+[2m2025-12-11T13:54:05.566925Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::connect::http[0m[2m:[0m connecting to 172.66.172.219:443
+[2m2025-12-11T13:54:05.860976Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::connect::http[0m[2m:[0m connected to 172.66.172.219:443
+[2m2025-12-11T13:54:06.679640Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:06.679954Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: ETH-USD = $3193.9600 (from 2 sources)
+[2m2025-12-11T13:54:06.680005Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 📊 Initializing price feed: WETH-USD
+[2m2025-12-11T13:54:06.680253Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:06.988051Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:06.988806Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:07.296927Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:07.297616Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: WETH-USD = $2295.7800 (from 2 sources)
+[2m2025-12-11T13:54:07.297713Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 📊 Initializing price feed: DAI-USD
+[2m2025-12-11T13:54:07.298042Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:07.492744Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:07.494171Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:07.867228Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:07.867697Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: DAI-USD = $1.0000 (from 2 sources)
+[2m2025-12-11T13:54:07.867773Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 📊 Initializing price feed: MNT-USD
+[2m2025-12-11T13:54:07.868424Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:08.062181Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:08.062893Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:08.435065Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:08.435631Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: MNT-USD = $0.5937 (from 2 sources)
+[2m2025-12-11T13:54:08.435711Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 📊 Initializing price feed: MNT-USD
+[2m2025-12-11T13:54:08.436351Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:08.630431Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:08.631040Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:08.868299Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:08.868920Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: MNT-USD = $0.5937 (from 2 sources)
+[2m2025-12-11T13:54:08.869271Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m ✅ Background price feed updates started (60s interval)
+[2m2025-12-11T13:54:08.869333Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🔗 Initializing Ethereum relayer
+[2m2025-12-11T13:54:08.869422Z[0m [32m INFO[0m [2mshadow_swap::ethereum::relayer[0m[2m:[0m 🔗 Initializing Ethereum relayer
+[2m2025-12-11T13:54:08.875573Z[0m [34mDEBUG[0m [2mreqwest::connect[0m[2m:[0m starting new connection: https://ethereum-sepolia-rpc.publicnode.com/
+[2m2025-12-11T13:54:08.875926Z[0m [34mDEBUG[0m [2mhyper::client::connect::dns[0m[2m:[0m resolving host="ethereum-sepolia-rpc.publicnode.com"
+[2m2025-12-11T13:54:08.877820Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:08.878576Z[0m [34mDEBUG[0m [2mhyper::client::connect::http[0m[2m:[0m connecting to 104.20.24.117:443
+[2m2025-12-11T13:54:09.078159Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:09.078413Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:09.123366Z[0m [34mDEBUG[0m [2mhyper::client::connect::http[0m[2m:[0m connected to 104.20.24.117:443
+[2m2025-12-11T13:54:09.123672Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m No cached session for DnsName("ethereum-sepolia-rpc.publicnode.com")
+[2m2025-12-11T13:54:09.124942Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m Not resuming any session
+[2m2025-12-11T13:54:09.320283Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:09.322525Z[0m [33m WARN[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m CoinGecko error for ETH-USD: API error: 429 Too Many Requests
+[2m2025-12-11T13:54:09.322639Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: ETH-USD = $3196.5300 (from 1 sources)
+[2m2025-12-11T13:54:09.323025Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:09.382106Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m Using ciphersuite TLS13_AES_256_GCM_SHA384
+[2m2025-12-11T13:54:09.382178Z[0m [34mDEBUG[0m [2mrustls::client::tls13[0m[2m:[0m Not resuming
+[2m2025-12-11T13:54:09.388104Z[0m [34mDEBUG[0m [2mrustls::client::tls13[0m[2m:[0m TLS1.3 encrypted extensions: [ServerNameAck, Protocols([ProtocolName(6832)])]
+[2m2025-12-11T13:54:09.388135Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m ALPN protocol is Some(b"h2")
+[2m2025-12-11T13:54:09.392868Z[0m [34mDEBUG[0m [2mh2::client[0m[2m:[0m binding client connection
+[2m2025-12-11T13:54:09.392926Z[0m [34mDEBUG[0m [2mh2::client[0m[2m:[0m client connection bound
+[2m2025-12-11T13:54:09.393063Z[0m [34mDEBUG[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mSettings { flags: (0x0), enable_push: 0, initial_window_size: 2097152, max_frame_size: 16384 }
+[2m2025-12-11T13:54:09.393843Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mWindowUpdate { stream_id: StreamId(0), size_increment: 5177345 }
+[2m2025-12-11T13:54:09.394101Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m pooling idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:09.394404Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(1), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:09.394456Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(1), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:09.753164Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:09.753400Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:09.755135Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mSettings { flags: (0x0), max_concurrent_streams: 100, initial_window_size: 65536, max_frame_size: 16777215 }
+[2m2025-12-11T13:54:09.755707Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mSettings { flags: (0x1: ACK) }
+[2m2025-12-11T13:54:09.755841Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mWindowUpdate { stream_id: StreamId(0), size_increment: 2147418112 }
+[2m2025-12-11T13:54:09.755895Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mSettings { flags: (0x1: ACK) }
+[2m2025-12-11T13:54:09.757914Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::proto::settings[0m[2m:[0m received settings ACK; applying Settings { flags: (0x0), enable_push: 0, initial_window_size: 2097152, max_frame_size: 16384 }
+[2m2025-12-11T13:54:09.759326Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(1), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:09.759565Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(1) }
+[2m2025-12-11T13:54:09.759603Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(1), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:09.763132Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🔗 Initializing Mantle relayer
+[2m2025-12-11T13:54:09.763178Z[0m [32m INFO[0m [2mshadow_swap::mantle::relayer[0m[2m:[0m 🔗 Initializing Mantle relayer
+[2m2025-12-11T13:54:09.763594Z[0m [34mDEBUG[0m [2mreqwest::connect[0m[2m:[0m starting new connection: https://rpc.sepolia.mantle.xyz/
+[2m2025-12-11T13:54:09.763728Z[0m [34mDEBUG[0m [2mhyper::client::connect::dns[0m[2m:[0m resolving host="rpc.sepolia.mantle.xyz"
+[2m2025-12-11T13:54:09.984007Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:09.985181Z[0m [33m WARN[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m CoinGecko error for WETH-USD: API error: 429 Too Many Requests
+[2m2025-12-11T13:54:09.985322Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: WETH-USD = $1400.1700 (from 1 sources)
+[2m2025-12-11T13:54:09.985766Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:09.986419Z[0m [34mDEBUG[0m [2mhyper::client::connect::http[0m[2m:[0m connecting to 150.136.40.78:443
+[2m2025-12-11T13:54:10.367501Z[0m [34mDEBUG[0m [2mhyper::client::connect::http[0m[2m:[0m connected to 150.136.40.78:443
+[2m2025-12-11T13:54:10.367803Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m No cached session for DnsName("rpc.sepolia.mantle.xyz")
+[2m2025-12-11T13:54:10.369211Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m Not resuming any session
+[2m2025-12-11T13:54:10.371810Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:10.371952Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:10.676337Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:10.677144Z[0m [33m WARN[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m CoinGecko error for DAI-USD: API error: 429 Too Many Requests
+[2m2025-12-11T13:54:10.677235Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: DAI-USD = $1.0000 (from 1 sources)
+[2m2025-12-11T13:54:10.677633Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:10.678336Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m Using ciphersuite TLS13_AES_128_GCM_SHA256
+[2m2025-12-11T13:54:10.678397Z[0m [34mDEBUG[0m [2mrustls::client::tls13[0m[2m:[0m Not resuming
+[2m2025-12-11T13:54:10.679719Z[0m [34mDEBUG[0m [2mrustls::client::tls13[0m[2m:[0m TLS1.3 encrypted extensions: [Protocols([ProtocolName(6832)]), ServerNameAck]
+[2m2025-12-11T13:54:10.679775Z[0m [34mDEBUG[0m [2mrustls::client::hs[0m[2m:[0m ALPN protocol is Some(b"h2")
+[2m2025-12-11T13:54:10.681363Z[0m [34mDEBUG[0m [2mh2::client[0m[2m:[0m binding client connection
+[2m2025-12-11T13:54:10.681426Z[0m [34mDEBUG[0m [2mh2::client[0m[2m:[0m client connection bound
+[2m2025-12-11T13:54:10.681457Z[0m [34mDEBUG[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mSettings { flags: (0x0), enable_push: 0, initial_window_size: 2097152, max_frame_size: 16384 }
+[2m2025-12-11T13:54:10.681715Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mWindowUpdate { stream_id: StreamId(0), size_increment: 5177345 }
+[2m2025-12-11T13:54:10.681896Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m pooling idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:10.682144Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(1), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:10.682209Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(1), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:10.880009Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m reuse idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:10.880768Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", min-api.cryptocompare.com)
+[2m2025-12-11T13:54:10.972761Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mSettings { flags: (0x0), header_table_size: 4096, max_concurrent_streams: 250, initial_window_size: 1048576, max_frame_size: 1048576, max_header_list_size: 1048896 }
+[2m2025-12-11T13:54:10.972877Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mSettings { flags: (0x1: ACK) }
+[2m2025-12-11T13:54:10.972927Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mWindowUpdate { stream_id: StreamId(0), size_increment: 983041 }
+[2m2025-12-11T13:54:10.972964Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mSettings { flags: (0x1: ACK) }
+[2m2025-12-11T13:54:10.972982Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::proto::settings[0m[2m:[0m received settings ACK; applying Settings { flags: (0x0), enable_push: 0, initial_window_size: 2097152, max_frame_size: 16384 }
+[2m2025-12-11T13:54:10.973928Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(1), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:10.974005Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(1), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:10.976633Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🌳 Initializing Merkle Tree Manager
+[2m2025-12-11T13:54:10.976723Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🔍 Initializing secret monitor
+[2m2025-12-11T13:54:10.976867Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🎯 Initializing bridge coordinator
+[2m2025-12-11T13:54:10.976890Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🌳 Starting Merkle Tree Manager service
+[2m2025-12-11T13:54:10.976984Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🔍 Starting secret monitor service
+[2m2025-12-11T13:54:10.977004Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m ⚙️  Starting bridge coordinator service
+[2m2025-12-11T13:54:10.977038Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m 🌐 Starting HTTP server on 0.0.0.0:8080
+[2m2025-12-11T13:54:10.977888Z[0m [32m INFO[0m [2mactix_server::builder[0m[2m:[0m starting 10 workers
+[2m2025-12-11T13:54:10.978012Z[0m [32m INFO[0m [2mshadow_swap[0m[2m:[0m ✅ All services started successfully
+[2m2025-12-11T13:54:10.978090Z[0m [32m INFO[0m [2mactix_server::server[0m[2m:[0m Actix runtime found; starting in Actix runtime
+[2m2025-12-11T13:54:10.978101Z[0m [32m INFO[0m [2mactix_server::server[0m[2m:[0m starting service: "actix-web-service-0.0.0.0:8080", workers: 10, listening on: 0.0.0.0:8080
+[2m2025-12-11T13:54:11.013657Z[0m [32m INFO[0m [2mshadow_swap::merkle_manager::merkletreemanager[0m[2m:[0m 🌳 Merkle Tree Manager starting
+[2m2025-12-11T13:54:11.013690Z[0m [32m INFO[0m [2mshadow_swap::merkle_manager::merkletreemanager[0m[2m:[0m 🔨 Rebuilding Mantle tree
+[2m2025-12-11T13:54:11.019207Z[0m [32m INFO[0m [2mshadow_swap::merkle_manager::merkletreemanager[0m[2m:[0m ✅ No Mantle intents
+[2m2025-12-11T13:54:11.019219Z[0m [32m INFO[0m [2mshadow_swap::merkle_manager::merkletreemanager[0m[2m:[0m 🔨 Rebuilding Ethereum tree
+[2m2025-12-11T13:54:11.019814Z[0m [32m INFO[0m [2mshadow_swap::merkle_manager::merkletreemanager[0m[2m:[0m ✅ No Ethereum fills
+[2m2025-12-11T13:54:11.019824Z[0m [32m INFO[0m [2mshadow_swap::merkle_manager::merkletreemanager[0m[2m:[0m 🔄 Starting root sync loop
+[2m2025-12-11T13:54:11.019864Z[0m [32m INFO[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m 🔍 Starting bridge secret monitor
+[2m2025-12-11T13:54:11.019938Z[0m [32m INFO[0m [2mshadow_swap::relay_coordinator::relay_coordinator[0m[2m:[0m 🌉 Starting multi-token Mantle bridge coordinator
+[2m2025-12-11T13:54:11.022447Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::relay_coordinator[0m[2m:[0m No pending intents to process
+[2m2025-12-11T13:54:11.027148Z[0m [33m WARN[0m [2mshadow_swap::merkle_manager::merkletreemanager[0m[2m:[0m ⚠️ Root sync failed: Mantle tree not found
+[2m2025-12-11T13:54:11.029278Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:11.030017Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Ethereum
+[2m2025-12-11T13:54:11.030475Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:11.030587Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:11.030734Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(3), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.030777Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(3), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.030881Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(3), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.030902Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(3), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.111714Z[0m [34mDEBUG[0m [2mhyper_util::client::legacy::pool[0m[2m:[0m pooling idle connection for ("https", api.coingecko.com)
+[2m2025-12-11T13:54:11.111896Z[0m [33m WARN[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m CoinGecko error for MNT-USD: API error: 429 Too Many Requests
+[2m2025-12-11T13:54:11.111923Z[0m [32m INFO[0m [2mshadow_swap::pricefeed::pricefeed[0m[2m:[0m 💰 Price updated: MNT-USD = $0.0474 (from 1 sources)
+[2m2025-12-11T13:54:11.315615Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(3), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.315711Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(3), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.316047Z[0m [32m INFO[0m [2mshadow_swap::ethereum::relayer[0m[2m:[0m 🌳 Syncing source chain 5000 root on Ethereum
+[2m2025-12-11T13:54:11.316361Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:11.316518Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(5), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.316561Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(5), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.433557Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(3), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.433728Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(3) }
+[2m2025-12-11T13:54:11.433770Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(3), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.434177Z[0m [32m INFO[0m [2mshadow_swap::mantle::relayer[0m[2m:[0m 🌳 Syncing source chain 1 root on Mantle
+[2m2025-12-11T13:54:11.434583Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:11.434821Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(5), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.434886Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(5), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.625175Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(5), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.625313Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(5) }
+[2m2025-12-11T13:54:11.625360Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(5), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.625907Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:11.626159Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(7), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.626236Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(7), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.716843Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(5), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.728126Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(5), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.728529Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:11.728741Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(7), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.728800Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(7), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.932145Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(7), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.955741Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(7) }
+[2m2025-12-11T13:54:11.955881Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(7) }
+[2m2025-12-11T13:54:11.956268Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(7), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:11.960503Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:11.960823Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(9), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:11.960912Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(9), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.013527Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(7), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.027942Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(7), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.028547Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:12.028762Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(9), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.028828Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(9), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.294563Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(9), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.294895Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(9) }
+[2m2025-12-11T13:54:12.294951Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(9), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.296532Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:12.297012Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(11), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.297116Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(11), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.308982Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(9), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.309353Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(9), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.310121Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:12.310541Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(11), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.310636Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(11), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.619958Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(11), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.620272Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(11), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.620673Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(11), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.620829Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(11) }
+[2m2025-12-11T13:54:12.620864Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(11), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.627560Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:12.629901Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:12.630252Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(13), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.630341Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(13), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:12.630577Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(13), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:12.630624Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(13), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:13.024313Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:13.030856Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(13), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:13.031117Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(13) }
+[2m2025-12-11T13:54:13.031174Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(13), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:13.161974Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(13), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:13.162090Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(13), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:15.023769Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:17.023955Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:19.025284Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:20.037562Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Starting to poll pending tx 0xa558e65101131ca23030ec14b9099c4b3eb36376564ffcba0cdd673f0356d0a5
+[2m2025-12-11T13:54:20.038488Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:20.039898Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(15), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:20.040096Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(15), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:20.166624Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Starting to poll pending tx 0x7d9f3163fc831468f82976295837a2a14904e0ff18d1f461d969525c17809355
+[2m2025-12-11T13:54:20.166917Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:20.167204Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(15), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:20.167296Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(15), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:20.385998Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(15), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:20.386296Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(15) }
+[2m2025-12-11T13:54:20.386358Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(15), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:20.470483Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(15), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:20.470802Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(15), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:20.472298Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Getting receipt for pending tx 0x7d9f3163fc831468f82976295837a2a14904e0ff18d1f461d969525c17809355
+[2m2025-12-11T13:54:20.473063Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:20.473565Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(17), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:20.473707Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(17), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:20.811224Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(17), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:20.811525Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(17), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:20.812791Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Checking receipt for pending tx 0x7d9f3163fc831468f82976295837a2a14904e0ff18d1f461d969525c17809355
+[2m2025-12-11T13:54:20.812901Z[0m [32m INFO[0m [2mshadow_swap::mantle::relayer[0m[2m:[0m ✅ Source chain root synced: 0x7d9f3163fc831468f82976295837a2a14904e0ff18d1f461d969525c17809355
+[2m2025-12-11T13:54:21.023308Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:21.027028Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::relay_coordinator[0m[2m:[0m No pending intents to process
+[2m2025-12-11T13:54:23.022486Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:23.022787Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Ethereum
+[2m2025-12-11T13:54:25.023363Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:27.023150Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:27.389072Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:27.389951Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(17), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:27.390213Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(17), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:27.730583Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(17), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:27.735967Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(17) }
+[2m2025-12-11T13:54:27.736003Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(17), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:27.736186Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Getting receipt for pending tx 0xa558e65101131ca23030ec14b9099c4b3eb36376564ffcba0cdd673f0356d0a5
+[2m2025-12-11T13:54:27.736375Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:27.736493Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(19), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:27.736537Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(19), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:28.045830Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(19), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:28.045896Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(19) }
+[2m2025-12-11T13:54:28.045918Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(19), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:28.046181Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Checking receipt for pending tx 0xa558e65101131ca23030ec14b9099c4b3eb36376564ffcba0cdd673f0356d0a5
+[2m2025-12-11T13:54:28.046225Z[0m [32m INFO[0m [2mshadow_swap::ethereum::relayer[0m[2m:[0m ✅ Source chain root synced: 0xa558e65101131ca23030ec14b9099c4b3eb36376564ffcba0cdd673f0356d0a5
+[2m2025-12-11T13:54:29.024652Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:31.026224Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:31.029954Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::relay_coordinator[0m[2m:[0m No pending intents to process
+[2m2025-12-11T13:54:33.023411Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:35.023476Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:35.024053Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Ethereum
+[2m2025-12-11T13:54:37.023671Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:39.022393Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:41.023181Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:41.024880Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:41.025238Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:41.026066Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(21), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.026344Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(21), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.027761Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(19), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.027895Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(19), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.032662Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::relay_coordinator[0m[2m:[0m No pending intents to process
+[2m2025-12-11T13:54:41.341330Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(19), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.341661Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(19), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.342694Z[0m [32m INFO[0m [2mshadow_swap::ethereum::relayer[0m[2m:[0m 🌳 Syncing source chain 5000 root on Ethereum
+[2m2025-12-11T13:54:41.343598Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:41.344219Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(23), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.344359Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(23), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.404388Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(21), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.408394Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(21) }
+[2m2025-12-11T13:54:41.408562Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(21), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.408975Z[0m [32m INFO[0m [2mshadow_swap::mantle::relayer[0m[2m:[0m 🌳 Syncing source chain 1 root on Mantle
+[2m2025-12-11T13:54:41.410582Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:41.411047Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(21), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.411176Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(21), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.662854Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(23), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.663222Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(23) }
+[2m2025-12-11T13:54:41.663348Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(23), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.664823Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:41.665327Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(25), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.665550Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(25), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.693805Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(21), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.698177Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(21), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.698750Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:41.699153Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(23), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.699403Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(23), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:41.969560Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(25), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:41.999740Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(25) }
+[2m2025-12-11T13:54:41.999866Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(25) }
+[2m2025-12-11T13:54:41.999897Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(25), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.000335Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(23), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.002766Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:42.003395Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(27), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.003533Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(27), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.006377Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(23), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.007118Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:42.007354Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(25), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.007430Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(25), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.293940Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(25), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.296427Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(25), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.297324Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:42.297654Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(27), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.297760Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(27), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.318422Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(27), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.318591Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(27) }
+[2m2025-12-11T13:54:42.318641Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(27), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.319759Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:42.320100Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(29), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.320205Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(29), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.582975Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(27), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.583341Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(27), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.587986Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:42.588186Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(29), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.588254Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(29), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.629003Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(29), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.634502Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(29) }
+[2m2025-12-11T13:54:42.634620Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(29), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:42.637915Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:42.638400Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(31), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:42.638530Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(31), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:43.023378Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:43.033932Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(31), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:43.034290Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(31) }
+[2m2025-12-11T13:54:43.034359Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(31), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:43.646157Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(29), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:43.646405Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(29), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:45.024155Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:47.026856Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:47.027864Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Ethereum
+[2m2025-12-11T13:54:49.023336Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:50.036845Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Starting to poll pending tx 0x5b3f7caec46faac7243fd470c04f156e9ec98da1ccedd7cc22f3045b62457105
+[2m2025-12-11T13:54:50.037559Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:50.038225Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(33), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:50.038420Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(33), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:50.405287Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(33), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:50.405766Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(33) }
+[2m2025-12-11T13:54:50.405846Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(33), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:50.406867Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Getting receipt for pending tx 0x5b3f7caec46faac7243fd470c04f156e9ec98da1ccedd7cc22f3045b62457105
+[2m2025-12-11T13:54:50.407426Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", ethereum-sepolia-rpc.publicnode.com)
+[2m2025-12-11T13:54:50.407833Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(35), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:50.407965Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(35), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:50.651034Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Starting to poll pending tx 0x0f6e13d194b291ad7ec473affb711e9ac9df64fd07ebbc38848b5a79f39db281
+[2m2025-12-11T13:54:50.651929Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:50.652913Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(31), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:50.653165Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(31), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:50.717627Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(35), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:50.718087Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(35) }
+[2m2025-12-11T13:54:50.718142Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(35), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:50.719440Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Checking receipt for pending tx 0x5b3f7caec46faac7243fd470c04f156e9ec98da1ccedd7cc22f3045b62457105
+[2m2025-12-11T13:54:50.719555Z[0m [32m INFO[0m [2mshadow_swap::ethereum::relayer[0m[2m:[0m ✅ Source chain root synced: 0x5b3f7caec46faac7243fd470c04f156e9ec98da1ccedd7cc22f3045b62457105
+[2m2025-12-11T13:54:51.019510Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(31), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:51.019852Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(31), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:51.021214Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Getting receipt for pending tx 0x0f6e13d194b291ad7ec473affb711e9ac9df64fd07ebbc38848b5a79f39db281
+[2m2025-12-11T13:54:51.022128Z[0m [34mDEBUG[0m [2mhyper::client::pool[0m[2m:[0m reuse idle connection for ("https", rpc.sepolia.mantle.xyz)
+[2m2025-12-11T13:54:51.022644Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(33), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:51.022786Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_write[0m[2m:[0m send [3mframe[0m[2m=[0mData { stream_id: StreamId(33), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:51.024589Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:51.037627Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::relay_coordinator[0m[2m:[0m No pending intents to process
+[2m2025-12-11T13:54:51.428964Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mHeaders { stream_id: StreamId(33), flags: (0x4: END_HEADERS) }
+[2m2025-12-11T13:54:51.429340Z[0m [34mDEBUG[0m [1mConnection[0m[1m{[0m[3mpeer[0m[2m=[0mClient[1m}[0m[2m:[0m [2mh2::codec::framed_read[0m[2m:[0m received [3mframe[0m[2m=[0mData { stream_id: StreamId(33), flags: (0x1: END_STREAM) }
+[2m2025-12-11T13:54:51.431162Z[0m [34mDEBUG[0m [2methers_providers::toolbox::pending_transaction[0m[2m:[0m Checking receipt for pending tx 0x0f6e13d194b291ad7ec473affb711e9ac9df64fd07ebbc38848b5a79f39db281
+[2m2025-12-11T13:54:51.431303Z[0m [32m INFO[0m [2mshadow_swap::mantle::relayer[0m[2m:[0m ✅ Source chain root synced: 0x0f6e13d194b291ad7ec473affb711e9ac9df64fd07ebbc38848b5a79f39db281
+[2m2025-12-11T13:54:53.024155Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:55.026860Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:57.028796Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:59.023068Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:54:59.023650Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Ethereum
+[2m2025-12-11T13:55:01.023328Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:55:01.039475Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::relay_coordinator[0m[2m:[0m No pending intents to process
+[2m2025-12-11T13:55:03.027713Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:55:05.023502Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
+[2m2025-12-11T13:55:07.023125Z[0m [34mDEBUG[0m [2mshadow_swap::relay_coordinator::secret_monitor[0m[2m:[0m No intents awaiting secrets on Mantle
