@@ -1,4 +1,41 @@
-node_modules
-/node_modules
-/target
-target
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+Cargo.lock  # Only if library, keep if binary
+
+# Solidity/Foundry
+out/
+cache/
+broadcast/
+lib/  # If using git submodules for deps
+
+# Node
+node_modules/
+.pnp
+.pnp.js
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Logs
+*.log
+debug.log
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
