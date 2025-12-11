@@ -12,10 +12,5 @@
     "lint": "cargo clippy -- -D warnings",
     "fmt": "cargo fmt -- --check",
     "check": "yarn fmt && yarn lint && yarn test"
-  },
-  "devDependencies": {
-    "cargo-watch": "^8.5.2",
-    "cargo-clippy": "^0.1.75",
-    "cargo-expand": "^1.0.64"
   }
 }
