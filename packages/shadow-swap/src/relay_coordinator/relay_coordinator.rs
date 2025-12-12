@@ -24,16 +24,15 @@ impl TokenType {
     pub fn from_address(address: &str) -> Result<Self> {
         match address.to_lowercase().as_str() {
             "0x0000000000000000000000000000000000000000" => Ok(Self::ETH),
-            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" => Ok(Self::USDC),
-            "0xdac17f958d2ee523a2206206994597c13d831ec7" => Ok(Self::USDT),
-            "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2" => Ok(Self::WETH),
-            "0x3c3a81e81dc49A522A592e7622A7E711c06bf354" => Ok(Self::MNT),
+            "0x28650373758d75a8fF0B22587F111e47BAC34e21" => Ok(Self::USDC),
+            "0x89F4f0e13997Ca27cEB963DEE291C607e4E59923" => Ok(Self::USDT),
+            "0x50e8Da97BeEB8064714dE45ce1F250879f3bD5B5" => Ok(Self::WETH),
+            "0x65e37B558F64E2Be5768DB46DF22F93d85741A9E" => Ok(Self::MNT),
 
-            "0x6b175474e89094c44da98b954eedeac495271d0f" => Ok(Self::DAI),
-            "0x09bc4e0d864854c6afb6eb9a9cdfe58c4fcaa6e5" => Ok(Self::USDC),
-            "0x201eba5cc46d216ce6dc03f6a759e8e766e956ae" => Ok(Self::USDT),
+            "0xA4b184006B59861f80521649b14E4E8A72499A23" => Ok(Self::USDC),
+            "0xB0ee6EF7788E9122fc4AAE327Ed4FEf56c7da891" => Ok(Self::USDT),
             "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111" => Ok(Self::WETH),
-            "0xdeaddeaddeaddeaddeaddeaddeaddeaddead0000" => Ok(Self::MNT),
+            "0x44FCE297e4D6c5A50D28Fb26A58202e4D49a13E7" => Ok(Self::MNT),
             _ => Err(anyhow!("Unsupported token address: {}", address)),
         }
     }
@@ -44,7 +43,6 @@ impl TokenType {
             "USDC" => Ok(Self::USDC),
             "USDT" => Ok(Self::USDT),
             "WETH" => Ok(Self::WETH),
-            "DAI" => Ok(Self::DAI),
             "MNT" => Ok(Self::MNT),
             _ => Err(anyhow::anyhow!("Unsupported token symbol: {}", symbol)),
         }
@@ -53,22 +51,20 @@ impl TokenType {
     pub fn get_ethereum_address(&self) -> &str {
         match self {
             Self::ETH => "0x0000000000000000000000000000000000000000",
-            Self::USDC => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-            Self::USDT => "0xdac17f958d2ee523a2206206994597c13d831ec7",
-            Self::WETH => "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-            Self::DAI => "0x6b175474e89094c44da98b954eedeac495271d0f",
-            Self::MNT => "0x3c3a81e81dc49A522A592e7622A7E711c06bf354",
+            Self::USDC => "0x28650373758d75a8fF0B22587F111e47BAC34e21",
+            Self::USDT => "0x89F4f0e13997Ca27cEB963DEE291C607e4E59923",
+            Self::WETH => "0x50e8Da97BeEB8064714dE45ce1F250879f3bD5B5",
+            Self::MNT => "0x65e37B558F64E2Be5768DB46DF22F93d85741A9E",
         }
     }
 
     pub fn get_mantle_address(&self) -> &str {
         match self {
             Self::ETH => "0x0000000000000000000000000000000000000000",
-            Self::USDC => "0x09bc4e0d864854c6afb6eb9a9cdfe58c4fcaa6e5",
-            Self::USDT => "0x201eba5cc46d216ce6dc03f6a759e8e766e956ae",
+            Self::USDC => "0xA4b184006B59861f80521649b14E4E8A72499A23",
+            Self::USDT => "0xB0ee6EF7788E9122fc4AAE327Ed4FEf56c7da891",
             Self::WETH => "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111",
-            Self::DAI => "0x0000000000000000000000000000000000000000",
-            Self::MNT => "0xdeaddeaddeaddeaddeaddeaddeaddeaddead0000",
+            Self::MNT => "0x44FCE297e4D6c5A50D28Fb26A58202e4D49a13E7",
         }
     }
 
@@ -76,7 +72,6 @@ impl TokenType {
         match self {
             Self::ETH | Self::WETH | Self::MNT => 18,
             Self::USDC | Self::USDT => 6,
-            Self::DAI => 18,
         }
     }
 
@@ -86,7 +81,6 @@ impl TokenType {
             Self::USDC => "USDC",
             Self::USDT => "USDT",
             Self::WETH => "WETH",
-            Self::DAI => "DAI",
             Self::MNT => "MNT",
         }
     }

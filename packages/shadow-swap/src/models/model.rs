@@ -144,6 +144,5 @@ pub enum TokenType {
     USDC,
     USDT,
     WETH,
-    DAI,
     MNT
 }

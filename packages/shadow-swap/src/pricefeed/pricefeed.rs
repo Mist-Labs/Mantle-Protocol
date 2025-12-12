@@ -57,7 +57,6 @@ impl PriceFeedManager {
             TokenType::USDC,
             TokenType::USDT,
             TokenType::WETH,
-            TokenType::DAI,
             TokenType::MNT,
         ];
 
@@ -94,7 +93,6 @@ impl PriceFeedManager {
                 let pairs = vec![
                     ("ETH", "USD"),
                     ("WETH", "USD"),
-                    ("DAI", "USD"),
                     ("MNT", "USD"),
                 ];
 
@@ -274,7 +272,7 @@ impl PriceFeedManager {
     }
 
     fn is_stablecoin(token: &TokenType) -> bool {
-        matches!(token, TokenType::USDC | TokenType::USDT | TokenType::DAI)
+        matches!(token, TokenType::USDC | TokenType::USDT)
     }
 
     // --- API INTEGRATIONS ---
@@ -311,7 +309,6 @@ impl PriceFeedManager {
             "ETH" | "WETH" => "ethereum",
             "USDC" => "usd-coin",
             "USDT" => "tether",
-            "DAI" => "dai",
             "MNT" => "mantle",
             _ => return Err(anyhow!("Unsupported symbol: {}", from_symbol)),
         };
