@@ -152,12 +152,13 @@ contract InvariantTest is StdInvariant, Test {
     
     address public relayer = makeAddr("relayer");
     address public feeCollector = makeAddr("feeCollector");
+    address public owner = makeAddr("owner");
     
     function setUp() public {
         // Deploy system
         poseidon = new PoseidonHasher();
-        intentPool = new PrivateIntentPool(relayer, feeCollector, address(poseidon));
-        settlement = new PrivateSettlement(relayer, feeCollector, address(poseidon));
+        intentPool = new PrivateIntentPool(owner, relayer, feeCollector, address(poseidon));
+        settlement = new PrivateSettlement(owner, relayer, feeCollector, address(poseidon));
         token = new MockERC20();
         
         // Deploy handler

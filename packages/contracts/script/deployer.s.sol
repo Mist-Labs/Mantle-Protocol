@@ -9,7 +9,7 @@ import {PrivateSettlement} from "../src/PrivateSettlement.sol";
 /**
  * @title DeployPoseidonHasher
  * @notice Deploy PoseidonHasher on Mantle (cheaper gas)
- * @dev Usage: forge script script/Deploy.s.sol:DeployPoseidonHasher --rpc-url $MANTLE_RPC_URL --broadcast --verify
+ * @dev Usage: forge script script/Deployer.s.sol:DeployPoseidonHasher --rpc-url $MANTLE_RPC_URL --broadcast --verify
  */
 contract DeployPoseidonHasher is Script {
     function run() external returns (address) {
@@ -38,7 +38,7 @@ contract DeployPoseidonHasher is Script {
 /**
  * @title DeployMantleContracts
  * @notice Deploy PrivateIntentPool and PrivateSettlement on Mantle
- * @dev Usage: forge script script/Deploy.s.sol:DeployMantleContracts --rpc-url $MANTLE_RPC_URL --broadcast --verify
+ * @dev Usage: forge script script/Deployer.s.sol:DeployMantleContracts --rpc-url $MANTLE_RPC_URL --broadcast --verify
  */
 contract DeployMantleContracts is Script {
     function run() external {
@@ -46,10 +46,12 @@ contract DeployMantleContracts is Script {
         address relayer = vm.envAddress("RELAYER_ADDRESS");
         address feeCollector = vm.envAddress("FEE_COLLECTOR_ADDRESS");
         address poseidonHasher = vm.envAddress("POSEIDON_HASHER_ADDRESS");
+        address owner = vm.envAddress("OWNER_ADDRESS");
         
         console.log("=== Mantle Chain Deployment ===");
         console.log("Deployer:", vm.addr(deployerPrivateKey));
         console.log("Relayer:", relayer);
+        console.log("Owner:", owner);
         console.log("Fee Collector:", feeCollector);
         console.log("Poseidon Hasher:", poseidonHasher);
         console.log("Chain ID:", block.chainid);
@@ -60,6 +62,7 @@ contract DeployMantleContracts is Script {
         // Deploy PrivateIntentPool
         console.log("Deploying PrivateIntentPool...");
         PrivateIntentPool intentPool = new PrivateIntentPool(
+            owner,
             relayer,
             feeCollector,
             poseidonHasher
@@ -70,6 +73,7 @@ contract DeployMantleContracts is Script {
         // Deploy PrivateSettlement
         console.log("Deploying PrivateSettlement...");
         PrivateSettlement settlement = new PrivateSettlement(
+            owner,
             relayer,
             feeCollector,
             poseidonHasher
@@ -92,7 +96,7 @@ contract DeployMantleContracts is Script {
 /**
  * @title DeployEthereumContracts
  * @notice Deploy PrivateIntentPool and PrivateSettlement on Ethereum
- * @dev Usage: forge script script/Deploy.s.sol:DeployEthereumContracts --rpc-url $ETHEREUM_RPC_URL --broadcast --verify
+ * @dev Usage: forge script script/Deployer.s.sol:DeployEthereumContracts --rpc-url $ETHEREUM_RPC_URL --broadcast --verify
  */
 contract DeployEthereumContracts is Script {
     function run() external {
@@ -100,10 +104,12 @@ contract DeployEthereumContracts is Script {
         address relayer = vm.envAddress("RELAYER_ADDRESS");
         address feeCollector = vm.envAddress("FEE_COLLECTOR_ADDRESS");
         address poseidonHasher = vm.envAddress("POSEIDON_HASHER_ADDRESS");
+        address owner = vm.envAddress("OWNER_ADDRESS");
         
         console.log("=== Ethereum Chain Deployment ===");
         console.log("Deployer:", vm.addr(deployerPrivateKey));
         console.log("Relayer:", relayer);
+        console.log("Owner:", owner);
         console.log("Fee Collector:", feeCollector);
         console.log("Poseidon Hasher:", poseidonHasher);
         console.log("Chain ID:", block.chainid);
@@ -114,6 +120,7 @@ contract DeployEthereumContracts is Script {
         // Deploy PrivateIntentPool
         console.log("Deploying PrivateIntentPool...");
         PrivateIntentPool intentPool = new PrivateIntentPool(
+            owner,
             relayer,
             feeCollector,
             poseidonHasher
@@ -124,6 +131,7 @@ contract DeployEthereumContracts is Script {
         // Deploy PrivateSettlement
         console.log("Deploying PrivateSettlement...");
         PrivateSettlement settlement = new PrivateSettlement(
+            owner,
             relayer,
             feeCollector,
             poseidonHasher

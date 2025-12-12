@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {IPoseidonHasher} from "./interface.sol";
 
 /**
@@ -12,7 +13,7 @@ import {IPoseidonHasher} from "./interface.sol";
  * @notice Settles cross-chain intents with privacy-preserving auto-claims
  * @dev Uses CANONICAL Merkle hashing (sorted pairs) - industry standard
  */
-contract PrivateSettlement is ReentrancyGuard {
+contract PrivateSettlement is ReentrancyGuard, Ownable {
     using ECDSA for bytes32;
 
     struct Fill {
@@ -28,14 +29,18 @@ contract PrivateSettlement is ReentrancyGuard {
     mapping(bytes32 => bool) public nullifiers;
     mapping(uint32 => bytes32) public sourceChainRoots;
     mapping(bytes32 => bytes32) public intentCommitments;
+    mapping(address => bool) public supportedTokens;
+
+    address[] private tokenList;
+    mapping(address => uint256) private tokenIndex;
 
     // Merkle tree for fills (for source chain verification)
     bytes32[] public fillTree;
     mapping(bytes32 => uint256) public fillIndex;
 
-    IPoseidonHasher public immutable poseidonHasher;
-    address public immutable relayer;
-    address public immutable feeCollector;
+    IPoseidonHasher public immutable POSEIDON_HASHER;
+    address public immutable RELAYER;
+    address public immutable FEE_COLLECTOR;
 
     uint256 public constant FEE_BPS = 5; // 0.05%
 
@@ -51,8 +56,11 @@ contract PrivateSettlement is ReentrancyGuard {
     );
     event RootSynced(uint32 indexed chainId, bytes32 root);
     event MerkleRootUpdated(bytes32 root);
+    event TokenAdded(address indexed token);
+    event TokenRemoved(address indexed token);
 
     error InvalidProof();
+    error InvalidToken();
     error NullifierUsed();
     error AlreadyFilled();
     error NotFilled();
@@ -61,15 +69,23 @@ contract PrivateSettlement is ReentrancyGuard {
     error InvalidSignature();
     error TransferFailed();
     error InvalidCommitment();
+    error AlreadySupported();
+    error TokenNotSupported();
+
+    modifier onlyRelayer() {
+        if (msg.sender != RELAYER) revert Unauthorized();
+        _;
+    }
 
     constructor(
+        address _owner,
         address _relayer,
         address _feeCollector,
         address _poseidonHasher
-    ) {
-        relayer = _relayer;
-        feeCollector = _feeCollector;
-        poseidonHasher = IPoseidonHasher(_poseidonHasher);
+    ) Ownable(_owner) {
+        RELAYER = _relayer;
+        FEE_COLLECTOR = _feeCollector;
+        POSEIDON_HASHER = IPoseidonHasher(_poseidonHasher);
     }
 
     /**
@@ -87,6 +103,7 @@ contract PrivateSettlement is ReentrancyGuard {
         uint256 leafIndex
     ) external nonReentrant {
         if (fills[intentId].solver != address(0)) revert AlreadyFilled();
+        if (!supportedTokens[token]) revert TokenNotSupported();
 
         // Verify commitment exists on source chain
         if (
@@ -134,9 +151,7 @@ contract PrivateSettlement is ReentrancyGuard {
         address recipient,
         bytes32 secret,
         bytes calldata claimAuth
-    ) external nonReentrant {
-        if (msg.sender != relayer) revert Unauthorized();
-
+    ) external nonReentrant onlyRelayer {
         Fill storage fill = fills[intentId];
         if (fill.solver == address(0)) revert NotFilled();
         if (fill.claimed) revert AlreadyClaimed();
@@ -154,7 +169,7 @@ contract PrivateSettlement is ReentrancyGuard {
         if (signer != recipient) revert InvalidSignature();
 
         // Verify signer knows the secret/nullifier
-        bytes32 computedCommitment = poseidonHasher.poseidon(
+        bytes32 computedCommitment = POSEIDON_HASHER.poseidon(
             [
                 secret,
                 nullifier,
@@ -180,18 +195,51 @@ contract PrivateSettlement is ReentrancyGuard {
             revert TransferFailed();
         }
 
-        if (!IERC20(fill.token).transfer(feeCollector, fee)) {
+        if (!IERC20(fill.token).transfer(FEE_COLLECTOR, fee)) {
             revert TransferFailed();
         }
 
         emit WithdrawalClaimed(intentId, nullifier, recipient);
     }
 
+    function addSupportedToken(address token) external onlyOwner {
+        if (supportedTokens[token]) revert AlreadySupported();
+        if (token == address(0)) revert InvalidToken();
+
+        supportedTokens[token] = true;
+        tokenIndex[token] = tokenList.length;
+        tokenList.push(token);
+
+        emit TokenAdded(token);
+    }
+
+    function removeSupportedToken(address token) external onlyOwner {
+        if (!supportedTokens[token]) revert TokenNotSupported();
+
+        supportedTokens[token] = false;
+
+        uint256 index = tokenIndex[token];
+        uint256 lastIndex = tokenList.length - 1;
+
+        if (index != lastIndex) {
+            address lastToken = tokenList[lastIndex];
+            tokenList[index] = lastToken;
+            tokenIndex[lastToken] = index;
+        }
+
+        tokenList.pop();
+        delete tokenIndex[token];
+
+        emit TokenRemoved(token);
+    }
+
     /**
      * @notice Sync source chain root for verification
      */
-    function syncSourceChainRoot(uint32 chainId, bytes32 root) external {
-        if (msg.sender != relayer) revert Unauthorized();
+    function syncSourceChainRoot(
+        uint32 chainId,
+        bytes32 root
+    ) external onlyRelayer {
         sourceChainRoots[chainId] = root;
         emit RootSynced(chainId, root);
     }
@@ -343,5 +391,17 @@ contract PrivateSettlement is ReentrancyGuard {
 
     function getFillTreeSize() external view returns (uint256) {
         return fillTree.length;
+    }
+
+    function getSupportedTokens() external view returns (address[] memory) {
+        return tokenList;
+    }
+
+    function getSupportedTokenCount() external view returns (uint256) {
+        return tokenList.length;
+    }
+
+    function isTokenSupported(address token) external view returns (bool) {
+        return supportedTokens[token];
     }
 }

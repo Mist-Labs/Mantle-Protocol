@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
-import {PoseidonHasher} from "../src/poseidonHasher.sol";
-import {PrivateSettlement} from "../src/privateSettlement.sol";
+import {PoseidonHasher} from "../src/PoseidonHasher.sol";
+import {PrivateSettlement} from "../src/PrivateSettlement.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {
@@ -31,6 +31,7 @@ contract PrivateSettlementTest is Test {
     address public feeCollector = makeAddr("feeCollector");
     address public solver = makeAddr("solver");
     address public recipient = makeAddr("recipient");
+    address public owner = makeAddr("owner");
 
     uint256 public recipientPrivateKey = 0x1234;
     address public recipientAddr;
@@ -55,26 +56,25 @@ contract PrivateSettlementTest is Test {
     );
     event RootSynced(uint32 indexed chainId, bytes32 root);
     event MerkleRootUpdated(bytes32 root);
+    event TokenAdded(address indexed token);
+    event TokenRemoved(address indexed token);
 
     function setUp() public {
-        // Deploy contracts
         poseidon = new PoseidonHasher();
         settlement = new PrivateSettlement(
+            owner,
             relayer,
             feeCollector,
             address(poseidon)
         );
         token = new MockERC20();
 
-        // Setup recipient with known private key
         recipientAddr = vm.addr(recipientPrivateKey);
 
-        // Setup test data
         secret = keccak256("secret");
         nullifier = keccak256("nullifier");
         intentId = keccak256(abi.encodePacked(block.timestamp, "intent1"));
 
-        // Generate commitment
         bytes32[4] memory inputs = [
             secret,
             nullifier,
@@ -83,19 +83,16 @@ contract PrivateSettlementTest is Test {
         ];
         commitment = poseidon.poseidon(inputs);
 
-        // Fund solver
         token.mint(solver, 1000 ether);
         vm.prank(solver);
         token.approve(address(settlement), type(uint256).max);
+
+        // Add token to whitelist
+        vm.prank(owner);
+        settlement.addSupportedToken(address(token));
     }
 
-    // ----------------------
-    // Merkle helper functions used by tests
-    // MUST match the contract's canonical ordering (a < b)
-    // ----------------------
-
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
-        // Uses the same canonical sorting as the contract
         return
             a < b
                 ? keccak256(abi.encodePacked(a, b))
@@ -117,10 +114,8 @@ contract PrivateSettlementTest is Test {
             bytes32[] memory next = new bytes32[](nextN);
 
             for (uint256 i = 0; i < n / 2; i++) {
-                // Canonical hash: must sort layer[2*i] and layer[2*i+1]
                 next[i] = _hashPair(layer[2 * i], layer[2 * i + 1]);
             }
-            // Handle odd number of leaves (copying the last element)
             if (n % 2 == 1) {
                 next[nextN - 1] = layer[n - 1];
             }
@@ -132,18 +127,18 @@ contract PrivateSettlementTest is Test {
         return layer[0];
     }
 
-    // FIX: Simplified Merkle proof generation to avoid complex error-prone logic for odd layers.
-    // Relies on the canonical hashing of the inputs in _verifySourceCommitment.
-    function getMerkleProof(bytes32[] memory leaves, uint256 index) internal pure returns (bytes32[] memory) {
+    function getMerkleProof(
+        bytes32[] memory leaves,
+        uint256 index
+    ) internal pure returns (bytes32[] memory) {
         uint256 n = leaves.length;
         if (n == 0) return new bytes32[](0);
         if (n == 1) return new bytes32[](0);
 
-        // First pass: count actual proof elements
         uint256 proofLength = 0;
         uint256 tempN = n;
         uint256 tempIndex = index;
-        
+
         while (tempN > 1) {
             if (tempIndex % 2 == 0) {
                 if (tempIndex + 1 < tempN) {
@@ -152,12 +147,11 @@ contract PrivateSettlementTest is Test {
             } else {
                 proofLength++;
             }
-            
+
             tempN = (tempN + 1) / 2;
             tempIndex = tempIndex / 2;
         }
 
-        // Second pass: build proof
         bytes32[] memory proof = new bytes32[](proofLength);
         bytes32[] memory layer = new bytes32[](n);
         for (uint256 i = 0; i < n; i++) {
@@ -181,11 +175,11 @@ contract PrivateSettlementTest is Test {
 
             uint256 nextN = (n + 1) / 2;
             bytes32[] memory next = new bytes32[](nextN);
-            
+
             for (uint256 i = 0; i < n / 2; i++) {
                 next[i] = _hashPair(layer[2 * i], layer[2 * i + 1]);
             }
-            
+
             if (n % 2 == 1) {
                 next[nextN - 1] = layer[n - 1];
             }
@@ -198,10 +192,96 @@ contract PrivateSettlementTest is Test {
         return proof;
     }
 
+    // ========== TOKEN WHITELIST TESTS ==========
+
+    function test_AddSupportedToken() public {
+        MockERC20 newToken = new MockERC20();
+
+        vm.expectEmit(true, false, false, false);
+        emit TokenAdded(address(newToken));
+
+        vm.prank(owner);
+        settlement.addSupportedToken(address(newToken));
+
+        assertTrue(settlement.isTokenSupported(address(newToken)));
+
+        address[] memory list = settlement.getSupportedTokens();
+        assertEq(list.length, 2);
+        assertEq(list[1], address(newToken));
+
+        assertEq(settlement.getSupportedTokenCount(), 2);
+    }
+
+    function test_RevertWhen_AddSupportedToken_NotOwner() public {
+        MockERC20 newToken = new MockERC20();
+
+        vm.prank(solver);
+        vm.expectRevert();
+        settlement.addSupportedToken(address(newToken));
+    }
+
+    function test_RevertWhen_AddSupportedToken_AlreadySupported() public {
+        vm.prank(owner);
+        vm.expectRevert(PrivateSettlement.AlreadySupported.selector);
+        settlement.addSupportedToken(address(token));
+    }
+
+    function test_RevertWhen_AddSupportedToken_ZeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert(PrivateSettlement.InvalidToken.selector);
+        settlement.addSupportedToken(address(0));
+    }
+
+    function test_RemoveSupportedToken() public {
+        vm.expectEmit(true, false, false, false);
+        emit TokenRemoved(address(token));
+
+        vm.prank(owner);
+        settlement.removeSupportedToken(address(token));
+
+        assertFalse(settlement.isTokenSupported(address(token)));
+
+        address[] memory list = settlement.getSupportedTokens();
+        assertEq(list.length, 0);
+
+        assertEq(settlement.getSupportedTokenCount(), 0);
+    }
+
+    function test_RevertWhen_RemoveSupportedToken_NotOwner() public {
+        vm.prank(solver);
+        vm.expectRevert();
+        settlement.removeSupportedToken(address(token));
+    }
+
+    function test_RevertWhen_RemoveSupportedToken_NotSupported() public {
+        address notSupported = address(0xBEEF);
+
+        vm.prank(owner);
+        vm.expectRevert(PrivateSettlement.TokenNotSupported.selector);
+        settlement.removeSupportedToken(notSupported);
+    }
+
+    function test_RemoveSupportedToken_MaintainsPackedArray() public {
+        MockERC20 tokenB = new MockERC20();
+
+        vm.startPrank(owner);
+        settlement.addSupportedToken(address(tokenB));
+        vm.stopPrank();
+
+        vm.prank(owner);
+        settlement.removeSupportedToken(address(token));
+
+        address[] memory list = settlement.getSupportedTokens();
+
+        assertEq(list.length, 1);
+        assertEq(list[0], address(tokenB));
+        assertTrue(settlement.isTokenSupported(address(tokenB)));
+        assertFalse(settlement.isTokenSupported(address(token)));
+    }
+
     // ========== FILL INTENT TESTS ==========
 
     function test_FillIntent() public {
-        // Single-leaf case: source root is the commitment itself, proof is empty
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
 
@@ -226,7 +306,6 @@ contract PrivateSettlementTest is Test {
 
         vm.stopPrank();
 
-        // Verify fill stored
         PrivateSettlement.Fill memory fill = settlement.getFill(intentId);
         assertEq(fill.solver, solver);
         assertEq(fill.token, address(token));
@@ -234,23 +313,46 @@ contract PrivateSettlementTest is Test {
         assertEq(fill.sourceChain, SOURCE_CHAIN);
         assertFalse(fill.claimed);
 
-        // Verify tokens transferred
         assertEq(token.balanceOf(address(settlement)), TEST_AMOUNT);
 
-        // Verify merkle tree updated
         assertEq(settlement.getFillTreeSize(), 1);
         assertEq(settlement.getMerkleRoot(), intentId);
     }
 
-    function test_RevertWhen_FillIntent_AlreadyFilled() public {
-        // Single-leaf test
+    function test_RevertWhen_FillIntent_TokenNotSupported() public {
+        MockERC20 unsupportedToken = new MockERC20();
+        unsupportedToken.mint(solver, 1000 ether);
+
+        vm.prank(solver);
+        unsupportedToken.approve(address(settlement), type(uint256).max);
+
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        // Fill once
+        vm.prank(solver);
+        vm.expectRevert(PrivateSettlement.TokenNotSupported.selector);
+        settlement.fillIntent(
+            intentId,
+            commitment,
+            SOURCE_CHAIN,
+            address(unsupportedToken),
+            TEST_AMOUNT,
+            sourceRoot,
+            proof,
+            0
+        );
+    }
+
+    function test_RevertWhen_FillIntent_AlreadyFilled() public {
+        bytes32 sourceRoot = commitment;
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(relayer);
+        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
@@ -263,7 +365,6 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // Try to fill again
         vm.prank(solver);
         vm.expectRevert(PrivateSettlement.AlreadyFilled.selector);
         settlement.fillIntent(
@@ -279,12 +380,10 @@ contract PrivateSettlementTest is Test {
     }
 
     function test_RevertWhen_FillIntent_InvalidProof() public {
-        // Sync a root that does not match the commitment or proof
         bytes32 sourceRoot = keccak256("some_other_root");
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        // Invalid proof array
         bytes32[] memory invalidProof = new bytes32[](1);
         invalidProof[0] = keccak256("invalid");
 
@@ -303,13 +402,11 @@ contract PrivateSettlementTest is Test {
     }
 
     function test_FillIntent_MultipleSolvers() public {
-        // Two commitments on the source chain → build leaves and proofs
         address solver2 = makeAddr("solver2");
         token.mint(solver2, 1000 ether);
         vm.prank(solver2);
         token.approve(address(settlement), type(uint256).max);
 
-        // first commitment already in setUp = commitment
         bytes32 secret2 = keccak256("secret2");
         bytes32 nullifier2 = keccak256("nullifier2");
         bytes32[4] memory inputs2 = [
@@ -329,7 +426,6 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        // First solver fills (proof for index 0)
         bytes32[] memory proof0 = getMerkleProof(leaves, 0);
         vm.prank(solver);
         settlement.fillIntent(
@@ -343,7 +439,6 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // Second solver fills different intent
         bytes32 intentId2 = keccak256("intent2");
 
         bytes32[] memory proof1 = getMerkleProof(leaves, 1);
@@ -365,7 +460,6 @@ contract PrivateSettlementTest is Test {
     // ========== CLAIM WITHDRAWAL TESTS ==========
 
     function test_ClaimWithdrawal() public {
-        // Single-leaf case (source root == commitment)
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
 
@@ -384,7 +478,6 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // Generate claim authorization signature
         bytes32 authHash = keccak256(
             abi.encodePacked(intentId, nullifier, recipientAddr)
         );
@@ -412,12 +505,10 @@ contract PrivateSettlementTest is Test {
 
         vm.stopPrank();
 
-        // Verify claimed
         PrivateSettlement.Fill memory fill = settlement.getFill(intentId);
         assertTrue(fill.claimed);
         assertTrue(settlement.isNullifierUsed(nullifier));
 
-        // Verify tokens transferred
         uint256 fee = (TEST_AMOUNT * settlement.FEE_BPS()) / 10000;
         uint256 expectedUserAmount = TEST_AMOUNT - fee;
         assertEq(token.balanceOf(recipientAddr), expectedUserAmount);
@@ -425,7 +516,6 @@ contract PrivateSettlementTest is Test {
     }
 
     function test_RevertWhen_ClaimWithdrawal_Unauthorized() public {
-        // Single-leaf case
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
 
@@ -444,15 +534,14 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // The actual unauthorized claim:
-        vm.prank(solver); // Not relayer
+        vm.prank(solver);
         vm.expectRevert(PrivateSettlement.Unauthorized.selector);
         settlement.claimWithdrawal(
             intentId,
             nullifier,
             recipientAddr,
             secret,
-            "" // dummy
+            ""
         );
     }
 
@@ -481,7 +570,6 @@ contract PrivateSettlementTest is Test {
     }
 
     function test_RevertWhen_ClaimWithdrawal_AlreadyClaimed() public {
-        // Single-leaf case
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
 
@@ -512,7 +600,6 @@ contract PrivateSettlementTest is Test {
         );
         bytes memory claimAuth = abi.encodePacked(r, s, v);
 
-        // Claim once
         vm.prank(relayer);
         settlement.claimWithdrawal(
             intentId,
@@ -522,7 +609,6 @@ contract PrivateSettlementTest is Test {
             claimAuth
         );
 
-        // Try to claim again
         vm.prank(relayer);
         vm.expectRevert(PrivateSettlement.AlreadyClaimed.selector);
         settlement.claimWithdrawal(
@@ -535,7 +621,6 @@ contract PrivateSettlementTest is Test {
     }
 
     function test_RevertWhen_ClaimWithdrawal_NullifierUsed() public {
-        // Single-leaf case
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
 
@@ -554,7 +639,6 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // Claim first intent
         bytes32 authHash = keccak256(
             abi.encodePacked(intentId, nullifier, recipientAddr)
         );
@@ -576,11 +660,9 @@ contract PrivateSettlementTest is Test {
             claimAuth
         );
 
-        // Try to use same nullifier for different intent
         bytes32 intentId2 = keccak256("intent2");
         bytes32 secret2 = keccak256("secret2");
 
-        // Use the same nullifier!
         bytes32[4] memory inputs2 = [
             secret2,
             nullifier,
@@ -589,7 +671,6 @@ contract PrivateSettlementTest is Test {
         ];
         bytes32 commitment2 = poseidon.poseidon(inputs2);
 
-        // Now build a 2-leaf source tree (commitment and commitment2)
         bytes32[] memory leaves = new bytes32[](2);
         leaves[0] = commitment;
         leaves[1] = commitment2;
@@ -598,7 +679,6 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot2);
 
-        // Fill the second intent
         bytes32[] memory proof2 = getMerkleProof(leaves, 1);
         vm.prank(solver);
         settlement.fillIntent(
@@ -625,7 +705,7 @@ contract PrivateSettlementTest is Test {
         vm.expectRevert(PrivateSettlement.NullifierUsed.selector);
         settlement.claimWithdrawal(
             intentId2,
-            nullifier, // Reused nullifier
+            nullifier,
             recipientAddr,
             secret2,
             claimAuth2
@@ -671,7 +751,7 @@ contract PrivateSettlementTest is Test {
             intentId,
             nullifier,
             recipientAddr,
-            wrongSecret, // Wrong secret
+            wrongSecret,
             claimAuth
         );
     }
@@ -695,7 +775,6 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // Generate a signature using a known private key that is NOT the recipient's key (e.g., solver's derived key)
         uint256 wrongPrivateKey = 0x5678;
 
         bytes32 authHash = keccak256(
@@ -707,11 +786,10 @@ contract PrivateSettlementTest is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(
             wrongPrivateKey,
             ethSignedHash
-        ); // Signed by the wrong key
+        );
         bytes memory invalidClaimAuth = abi.encodePacked(r, s, v);
 
         vm.prank(relayer);
-        // This should now revert because the recovered address != recipientAddr (due to Fix 2 in the contract)
         vm.expectRevert(PrivateSettlement.InvalidSignature.selector);
         settlement.claimWithdrawal(
             intentId,
@@ -739,12 +817,12 @@ contract PrivateSettlementTest is Test {
     function test_RevertWhen_SyncSourceChainRoot_Unauthorized() public {
         bytes32 root = keccak256("root");
 
-        vm.prank(solver); // Not relayer
+        vm.prank(solver);
         vm.expectRevert(PrivateSettlement.Unauthorized.selector);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, root);
     }
 
-    // ========== MERKLE TREE TESTS (Internal Fill Tree) ==========
+    // ========== MERKLE TREE TESTS ==========
 
     function test_GenerateFillProof_SingleFill() public {
         bytes32 sourceRoot = commitment;
@@ -766,19 +844,16 @@ contract PrivateSettlementTest is Test {
         );
 
         bytes32[] memory fillProof = settlement.generateFillProof(intentId);
-        // For a single element tree, the proof should be empty.
         assertEq(fillProof.length, 0);
         assertEq(settlement.getMerkleRoot(), intentId);
     }
 
     function test_GenerateFillProof_MultipleFills() public {
-        // Prepare source root for first fill (single leaf)
         bytes32 sourceRoot1 = commitment;
         bytes32[] memory proof0 = new bytes32[](0);
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot1);
 
-        // Fill 1
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
@@ -791,7 +866,6 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // Prepare next commitment and source root (single leaf again for simplicity)
         bytes32 intentId2 = keccak256("intent2");
         bytes32 secret2 = keccak256("secret2");
         bytes32 nullifier2 = keccak256("nullifier2");
@@ -806,9 +880,8 @@ contract PrivateSettlementTest is Test {
         bytes32 sourceRoot2 = commitment2;
         bytes32[] memory proof1 = new bytes32[](0);
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(2, sourceRoot2); // Use a different chainId for cleanliness
+        settlement.syncSourceChainRoot(2, sourceRoot2);
 
-        // Fill 2
         vm.prank(solver);
         settlement.fillIntent(
             intentId2,
@@ -821,22 +894,15 @@ contract PrivateSettlementTest is Test {
             0
         );
 
-        // Now the fillTree has 2 leaves: [intentId, intentId2]
-
-        // 1. Check Root
         bytes32 expectedRoot = _hashPair(intentId, intentId2);
         assertEq(settlement.getMerkleRoot(), expectedRoot);
 
-        // 2. Check Proof 1 (intentId at index 0)
         bytes32[] memory fillProof1 = settlement.generateFillProof(intentId);
         assertEq(fillProof1.length, 1);
-        // The sibling is intentId2. Since _hashPair is canonical, the proof element should be intentId2.
         assertEq(fillProof1[0], intentId2);
 
-        // 3. Check Proof 2 (intentId2 at index 1)
         bytes32[] memory fillProof2 = settlement.generateFillProof(intentId2);
         assertEq(fillProof2.length, 1);
-        // The sibling is intentId.
         assertEq(fillProof2[0], intentId);
     }
 
