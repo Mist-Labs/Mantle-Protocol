@@ -214,11 +214,11 @@ cargo run --release
 ### Deploy Contracts
 ```bash
 # Deploy on Mantle Sepolia
-forge script script/Deploy.s.sol:DeployMantleContracts \
+forge script script/Deployer.s.sol:DeployMantleContracts \
   --rpc-url $MANTLE_RPC_URL --broadcast --verify
 
 # Deploy on Ethereum Sepolia
-forge script script/Deploy.s.sol:DeployEthereumContracts \
+forge script script/Deployer.s.sol:DeployEthereumContracts \
   --rpc-url $ETHEREUM_RPC_URL --broadcast --verify
 ```
 
