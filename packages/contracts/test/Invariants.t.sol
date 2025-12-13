@@ -77,9 +77,7 @@ contract PrivacyBridgeHandler is Test {
             address(token),
             amount,
             1,
-            address(this),
-            secret,
-            nullifier
+            address(this)
         ) {
             ghost_totalDeposited += amount;
             ghost_intentCount++;

@@ -185,9 +185,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.stopPrank();
@@ -221,48 +219,8 @@ contract PrivateIntentPoolTest is Test {
             address(unsupportedToken),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
-    }
-
-    function test_RevertWhen_CreateIntent_InvalidCommitment() public {
-        vm.startPrank(relayer);
-
-        bytes32 wrongCommitment = keccak256("wrong");
-
-        vm.expectRevert(PrivateIntentPool.InvalidCommitment.selector);
-        pool.createIntent(
-            intentId,
-            wrongCommitment,
-            address(token),
-            TEST_AMOUNT,
-            DEST_CHAIN,
-            user,
-            secret,
-            nullifier
-        );
-
-        vm.stopPrank();
-    }
-
-    function test_RevertWhen_CreateIntent_Unauthorized() public {
-        vm.startPrank(user);
-
-        vm.expectRevert(PrivateIntentPool.Unauthorized.selector);
-        pool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            TEST_AMOUNT,
-            DEST_CHAIN,
-            user,
-            secret,
-            nullifier
-        );
-
-        vm.stopPrank();
     }
 
     function test_RevertWhen_CreateIntent_AmountTooSmall() public {
@@ -277,9 +235,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             smallAmount,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.stopPrank();
@@ -297,9 +253,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             largeAmount,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.stopPrank();
@@ -314,9 +268,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 intentId2 = keccak256("intent2");
@@ -327,9 +279,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.stopPrank();
@@ -344,9 +294,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 secret2 = keccak256("secret2");
@@ -366,9 +314,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret2,
-            nullifier2
+            user
         );
 
         vm.stopPrank();
@@ -384,9 +330,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 destRoot = intentId;
@@ -421,9 +365,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32[] memory proof = new bytes32[](0);
@@ -450,9 +392,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 destRoot = intentId;
@@ -478,9 +418,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 destRoot = keccak256("destRoot");
@@ -503,9 +441,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 destRoot = intentId;
@@ -536,9 +472,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
@@ -562,9 +496,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.expectRevert(PrivateIntentPool.IntentNotExpired.selector);
@@ -579,9 +511,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 destRoot = intentId;
@@ -607,9 +537,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
@@ -678,9 +606,7 @@ contract PrivateIntentPoolTest is Test {
                 address(token),
                 TEST_AMOUNT,
                 DEST_CHAIN,
-                user,
-                s,
-                n
+                user
             );
 
             assertTrue(pool.isCommitmentUsed(c));
@@ -717,9 +643,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             amount,
             DEST_CHAIN,
-            user,
-            s,
-            n
+            user
         );
 
         PrivateIntentPool.Intent memory intent = pool.getIntent(id);
@@ -736,9 +660,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + timeAfterDeadline);
@@ -761,9 +683,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
         uint256 gasUsed = gasBefore - gasleft();
 
@@ -779,9 +699,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 destRoot = intentId;
@@ -807,9 +725,7 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
