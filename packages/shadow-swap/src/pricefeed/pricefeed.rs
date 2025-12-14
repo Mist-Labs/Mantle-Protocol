@@ -90,11 +90,7 @@ impl PriceFeedManager {
             loop {
                 interval.tick().await;
 
-                let pairs = vec![
-                    ("ETH", "USD"),
-                    ("WETH", "USD"),
-                    ("MNT", "USD"),
-                ];
+                let pairs = vec![("ETH", "USD"), ("WETH", "USD"), ("MNT", "USD")];
 
                 for (from, to) in pairs {
                     if let Err(e) =
@@ -130,23 +126,27 @@ impl PriceFeedManager {
         let mut sum = 0.0;
         let mut count = 0;
 
-        match Self::get_cryptocompare_price(client, from_symbol, to_symbol).await {
-            Ok(price) => {
-                sources.push(SourcePrice {
-                    source: "CryptoCompare".to_string(),
-                    price,
-                });
-                sum += price;
-                count += 1;
-            }
-            Err(e) => {
-                warn!(
-                    "CryptoCompare error for {}-{}: {}",
-                    from_symbol, to_symbol, e
-                );
+        // Skip CryptoCompare for MNT (wrong token)
+        if from_symbol != "MNT" {
+            match Self::get_cryptocompare_price(client, from_symbol, to_symbol).await {
+                Ok(price) => {
+                    sources.push(SourcePrice {
+                        source: "CryptoCompare".to_string(),
+                        price,
+                    });
+                    sum += price;
+                    count += 1;
+                }
+                Err(e) => {
+                    warn!(
+                        "CryptoCompare error for {}-{}: {}",
+                        from_symbol, to_symbol, e
+                    );
+                }
             }
         }
 
+        // Try CoinGecko
         match Self::get_coingecko_price(client, from_symbol, to_symbol).await {
             Ok(price) => {
                 sources.push(SourcePrice {
@@ -161,6 +161,36 @@ impl PriceFeedManager {
             }
         }
 
+        // Try Gate.io
+        match Self::get_gateio_price(client, from_symbol).await {
+            Ok(price) => {
+                sources.push(SourcePrice {
+                    source: "Gate.io".to_string(),
+                    price,
+                });
+                sum += price;
+                count += 1;
+            }
+            Err(e) => {
+                warn!("Gate.io error for {}-{}: {}", from_symbol, to_symbol, e);
+            }
+        }
+
+        // Try MEXC
+        match Self::get_mexc_price(client, from_symbol).await {
+            Ok(price) => {
+                sources.push(SourcePrice {
+                    source: "MEXC".to_string(),
+                    price,
+                });
+                sum += price;
+                count += 1;
+            }
+            Err(e) => {
+                warn!("MEXC error for {}-{}: {}", from_symbol, to_symbol, e);
+            }
+        }
+
         if count > 0 {
             let average_price = sum / count as f64;
             let pair_key = format!("{}-{}", from_symbol, to_symbol);
@@ -168,15 +198,19 @@ impl PriceFeedManager {
             let price_data = PriceData {
                 price: average_price,
                 timestamp: Utc::now().timestamp(),
-                sources,
+                sources: sources.clone(),
             };
 
             let mut cache_guard = cache.write().await;
             cache_guard.insert(pair_key.clone(), price_data);
 
+            let source_names: Vec<String> = sources.iter().map(|s| s.source.clone()).collect();
             info!(
-                "💰 Price updated: {} = ${:.4} (from {} sources)",
-                pair_key, average_price, count
+                "💰 Price updated: {} = ${:.4} (from {} sources: {})",
+                pair_key,
+                average_price,
+                count,
+                source_names.join(", ")
             );
             Ok(())
         } else {
@@ -336,6 +370,57 @@ impl PriceFeedManager {
         }
     }
 
+    async fn get_gateio_price(client: &Client, from_symbol: &str) -> Result<f64> {
+        let pair = format!("{}_USDT", from_symbol.to_uppercase());
+        let url = format!(
+            "https://api.gateio.ws/api/v4/spot/tickers?currency_pair={}",
+            pair
+        );
+
+        let response = client.get(&url).send().await?;
+
+        if response.status().is_success() {
+            let data: serde_json::Value = response.json().await?;
+            if let Some(ticker) = data.as_array().and_then(|arr| arr.first()) {
+                let price = ticker["last"]
+                    .as_str()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .ok_or_else(|| anyhow!("Invalid price format"))?;
+                Ok(price)
+            } else {
+                Err(anyhow!("No ticker data for pair {}", pair))
+            }
+        } else {
+            Err(anyhow!(
+                "API error: {} for pair {}",
+                response.status(),
+                pair
+            ))
+        }
+    }
+
+    async fn get_mexc_price(client: &Client, from_symbol: &str) -> Result<f64> {
+        let symbol = format!("{}USDT", from_symbol.to_uppercase());
+        let url = format!("https://api.mexc.com/api/v3/ticker/price?symbol={}", symbol);
+
+        let response = client.get(&url).send().await?;
+
+        if response.status().is_success() {
+            let data: serde_json::Value = response.json().await?;
+            let price = data["price"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .ok_or_else(|| anyhow!("Invalid price format for symbol {}", symbol))?;
+            Ok(price)
+        } else {
+            Err(anyhow!(
+                "API error: {} for symbol {}",
+                response.status(),
+                symbol
+            ))
+        }
+    }
+
     pub async fn get_all_prices(&self) -> HashMap<String, PriceData> {
         self.cache.read().await.clone()
     }
@@ -367,5 +452,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(rate, 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_mnt_price_fetch() {
+        let manager = PriceFeedManager::new();
+        manager.init_price_feed("MNT", "USD").await;
+
+        let price = manager.get_usd_price("MNT").await;
+        assert!(price.is_ok());
+        assert!(price.unwrap() > 0.0);
     }
 }

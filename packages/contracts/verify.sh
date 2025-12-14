@@ -32,7 +32,7 @@ forge verify-contract 0x28650373758d75a8fF0B22587F111e47BAC34e21 \
 sleep 30
 
 echo "🔍 Verifying Ethereum PrivateIntentPool..."
-forge verify-contract 0x2D7102132042f60390AE76a24bF4Bd4358184dA3 \
+forge verify-contract 0x759b40396ac6ff7f1d1cBe095507b5f65229b05a \
   src/privateIntentPool.sol:PrivateIntentPool \
   --rpc-url $ETHEREUM_RPC_URL \
   --constructor-args $(cast abi-encode "constructor(address,address,address,address)" \

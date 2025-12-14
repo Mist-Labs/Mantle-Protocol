@@ -40,7 +40,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
 
     uint256 public constant MIN_AMOUNT = 0.001 ether;
     uint256 public constant MAX_AMOUNT = 100 ether;
-    uint256 public constant INTENT_TIMEOUT = 1 hours;
+    uint256 public constant INTENT_TIMEOUT = 6 hours;
     uint256 public constant FEE_BPS = 10;
 
     event IntentCreated(
@@ -93,21 +93,13 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         address token,
         uint256 amount,
         uint32 destChain,
-        address refundTo,
-        bytes32 secret,
-        bytes32 nullifier
-    ) external nonReentrant onlyRelayer {
+        address refundTo
+    ) external nonReentrant {
         if (!supportedTokens[token]) revert TokenNotSupported(); 
         if (amount < MIN_AMOUNT || amount > MAX_AMOUNT) revert InvalidAmount();
         if (commitments[commitment]) revert DuplicateCommitment();
         if (intents[intentId].commitment != bytes32(0))
             revert DuplicateCommitment();
-
-        bytes32 computedCommitment = poseidonHasher.poseidon(
-            [secret, nullifier, bytes32(amount), bytes32(uint256(destChain))]
-        );
-
-        if (computedCommitment != commitment) revert InvalidCommitment();
 
         commitments[commitment] = true;
 

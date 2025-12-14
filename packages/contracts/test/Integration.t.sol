@@ -100,9 +100,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         assertEq(token.balanceOf(address(intentPool)), TEST_AMOUNT);
@@ -199,9 +197,7 @@ contract IntegrationTest is Test {
                 address(token),
                 TEST_AMOUNT,
                 DEST_CHAIN,
-                user,
-                secret,
-                nullifier
+                user
             );
 
             // Fill intent (single-leaf tree)
@@ -270,9 +266,7 @@ contract IntegrationTest is Test {
             address(unsupportedToken),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
     }
 
@@ -380,9 +374,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 sourceRoot = commitment;
@@ -445,9 +437,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret2,
-            nullifier
+            user
         );
 
         bytes32 sourceRoot2 = commitment2;
@@ -500,9 +490,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         uint256 userBalanceBefore = token.balanceOf(user);
@@ -536,9 +524,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         vm.warp(block.timestamp + intentPool.INTENT_TIMEOUT() + 1);
@@ -579,9 +565,7 @@ contract IntegrationTest is Test {
                 address(token),
                 TEST_AMOUNT,
                 DEST_CHAIN,
-                user,
-                secret,
-                nullifier
+                user
             );
         }
 
@@ -614,9 +598,7 @@ contract IntegrationTest is Test {
             address(token),
             largeAmount,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         assertEq(token.balanceOf(address(intentPool)), largeAmount);
@@ -643,9 +625,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         uint256 poolBalance = token.balanceOf(address(intentPool));
@@ -683,9 +663,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         assertTrue(true);
@@ -710,9 +688,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         bytes32 destRoot = intentId;
@@ -756,9 +732,7 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user,
-            secret,
-            nullifier
+            user
         );
 
         uint256 gasAfterCreate = gasleft();
