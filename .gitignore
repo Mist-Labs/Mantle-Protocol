@@ -37,3 +37,5 @@ debug.log
 dist/
 build/
 *.tsbuildinfo
+
+SRS
