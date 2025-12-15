@@ -57,7 +57,7 @@ export default function HeroSection() {
   }
 
   return (
-    <section className="relative pt-32 pb-20 sm:pt-40 sm:pb-32 px-4 sm:px-6 overflow-hidden">
+    <section className="relative overflow-hidden px-4 pb-20 pt-32 sm:px-6 sm:pb-32 sm:pt-40">
       {/* Animated Background Grid */}
       <div
         className="absolute inset-0 opacity-10"
@@ -69,91 +69,91 @@ export default function HeroSection() {
       />
 
       {/* Glowing Orbs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-orange-500/10 rounded-full blur-3xl animate-pulse"></div>
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse delay-1000"></div>
+      <div className="absolute left-1/4 top-1/4 h-96 w-96 animate-pulse rounded-full bg-orange-500/10 blur-3xl"></div>
+      <div className="absolute bottom-1/4 right-1/4 h-96 w-96 animate-pulse rounded-full bg-pink-500/10 blur-3xl delay-1000"></div>
 
-      <div className="max-w-6xl mx-auto text-center relative z-10">
+      <div className="relative z-10 mx-auto max-w-6xl text-center">
         {/* Badge */}
         <Badge
           variant="outline"
-          className="mb-6 border-orange-500/50 text-orange-500 px-4 py-1.5 text-xs tracking-wider"
+          className="mb-6 border-orange-500/50 px-4 py-1.5 text-xs tracking-wider text-orange-500"
         >
-          <span className="animate-pulse mr-2">●</span>
+          <span className="mr-2 animate-pulse">●</span>
           PRIVACY-ENHANCED CROSS-CHAIN BRIDGE
         </Badge>
 
         {/* Main Headline */}
-        <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-6 leading-tight">
+        <h1 className="mb-6 text-4xl font-bold leading-tight tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
           <span className="text-white">Bridge Assets</span>
           <br />
           <span className="text-white">Across Chains.</span>
           <br />
-          <span className="bg-gradient-to-r from-orange-500 via-pink-500 to-orange-500 bg-clip-text text-transparent animate-gradient">
+          <span className="animate-gradient bg-gradient-to-r from-orange-500 via-pink-500 to-orange-500 bg-clip-text text-transparent">
             Privately. Instantly.
           </span>
         </h1>
 
         {/* Subtitle */}
-        <p className="text-neutral-400 text-lg sm:text-xl mb-10 max-w-3xl mx-auto leading-relaxed">
+        <p className="mx-auto mb-10 max-w-3xl text-lg leading-relaxed text-neutral-400 sm:text-xl">
           Privacy-preserving, intent-based bridge with one-click UX and automatic claim execution. Built on
           battle-tested technology.
         </p>
 
         {/* CTA Buttons */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-center mb-16">
+        <div className="mb-16 flex flex-col justify-center gap-4 sm:flex-row">
           <Link href="/bridge">
             <Button
               size="lg"
-              className="bg-orange-500 hover:bg-orange-600 text-white shadow-2xl shadow-orange-500/30 transition-all duration-300 hover:scale-105 px-8 text-base group"
+              className="group bg-orange-500 px-8 text-base text-white shadow-2xl shadow-orange-500/30 transition-all duration-300 hover:scale-105 hover:bg-orange-600"
             >
               Launch App
-              <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
             </Button>
           </Link>
           <Link href="/docs">
             <Button
               size="lg"
               variant="outline"
-              className="border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-white px-8 text-base"
+              className="border-neutral-700 bg-neutral-900 px-8 text-base text-white hover:bg-neutral-800"
             >
-              <FileText className="mr-2 w-4 h-4" />
+              <FileText className="mr-2 h-4 w-4" />
               Read Docs
             </Button>
           </Link>
         </div>
 
         {/* Stats Ticker */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto">
-          <div className="bg-neutral-900/50 border border-neutral-800 rounded-lg p-6 backdrop-blur-sm hover:border-orange-500/30 transition-all duration-300">
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <TrendingUp className="w-5 h-5 text-orange-500" />
-              <span className="text-xs text-neutral-500 tracking-wider">TOTAL VOLUME</span>
+        <div className="mx-auto grid max-w-4xl grid-cols-2 gap-6 md:grid-cols-4">
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 p-6 backdrop-blur-sm transition-all duration-300 hover:border-orange-500/30">
+            <div className="mb-2 flex items-center justify-center gap-2">
+              <TrendingUp className="h-5 w-5 text-orange-500" />
+              <span className="text-xs tracking-wider text-neutral-500">TOTAL VOLUME</span>
             </div>
-            <div className="text-2xl sm:text-3xl font-bold text-white font-mono">{formatNumber(totalVolume)}</div>
+            <div className="font-mono text-2xl font-bold text-white sm:text-3xl">{formatNumber(totalVolume)}</div>
           </div>
 
-          <div className="bg-neutral-900/50 border border-neutral-800 rounded-lg p-6 backdrop-blur-sm hover:border-orange-500/30 transition-all duration-300">
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <Users className="w-5 h-5 text-orange-500" />
-              <span className="text-xs text-neutral-500 tracking-wider">ACTIVE USERS</span>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 p-6 backdrop-blur-sm transition-all duration-300 hover:border-orange-500/30">
+            <div className="mb-2 flex items-center justify-center gap-2">
+              <Users className="h-5 w-5 text-orange-500" />
+              <span className="text-xs tracking-wider text-neutral-500">ACTIVE USERS</span>
             </div>
-            <div className="text-2xl sm:text-3xl font-bold text-white font-mono">{activeUsers.toLocaleString()}</div>
+            <div className="font-mono text-2xl font-bold text-white sm:text-3xl">{activeUsers.toLocaleString()}</div>
           </div>
 
-          <div className="bg-neutral-900/50 border border-neutral-800 rounded-lg p-6 backdrop-blur-sm hover:border-orange-500/30 transition-all duration-300">
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <Clock className="w-5 h-5 text-orange-500" />
-              <span className="text-xs text-neutral-500 tracking-wider">AVG BRIDGE TIME</span>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 p-6 backdrop-blur-sm transition-all duration-300 hover:border-orange-500/30">
+            <div className="mb-2 flex items-center justify-center gap-2">
+              <Clock className="h-5 w-5 text-orange-500" />
+              <span className="text-xs tracking-wider text-neutral-500">AVG BRIDGE TIME</span>
             </div>
-            <div className="text-2xl sm:text-3xl font-bold text-white font-mono">{avgBridgeTime}s</div>
+            <div className="font-mono text-2xl font-bold text-white sm:text-3xl">{avgBridgeTime}s</div>
           </div>
 
-          <div className="bg-neutral-900/50 border border-neutral-800 rounded-lg p-6 backdrop-blur-sm hover:border-orange-500/30 transition-all duration-300">
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <CheckCircle2 className="w-5 h-5 text-orange-500" />
-              <span className="text-xs text-neutral-500 tracking-wider">TRANSACTIONS</span>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 p-6 backdrop-blur-sm transition-all duration-300 hover:border-orange-500/30">
+            <div className="mb-2 flex items-center justify-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-orange-500" />
+              <span className="text-xs tracking-wider text-neutral-500">TRANSACTIONS</span>
             </div>
-            <div className="text-2xl sm:text-3xl font-bold text-white font-mono">
+            <div className="font-mono text-2xl font-bold text-white sm:text-3xl">
               {totalTransactions.toLocaleString()}
             </div>
           </div>

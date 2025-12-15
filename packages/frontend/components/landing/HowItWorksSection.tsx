@@ -34,53 +34,53 @@ export default function HowItWorksSection() {
   ]
 
   return (
-    <section className="py-20 px-4 sm:px-6 bg-black">
-      <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-16">
-          <Badge variant="outline" className="mb-4 border-orange-500/50 text-orange-500 tracking-wider">
+    <section className="bg-black px-4 py-20 sm:px-6">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-16 text-center">
+          <Badge variant="outline" className="mb-4 border-orange-500/50 tracking-wider text-orange-500">
             HOW IT WORKS
           </Badge>
-          <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white mb-4">
+          <h2 className="mb-4 text-3xl font-bold text-white sm:text-4xl md:text-5xl">
             Bridge in <span className="text-orange-500">4 Simple Steps</span>
           </h2>
-          <p className="text-neutral-400 text-lg max-w-2xl mx-auto">
+          <p className="mx-auto max-w-2xl text-lg text-neutral-400">
             From wallet connection to funds received in under 30 seconds
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-4">
           {steps.map((step, index) => (
             <div key={index} className="relative">
               {/* Connector Line (desktop only) */}
               {index < steps.length - 1 && (
-                <div className="hidden lg:block absolute top-12 left-full w-full h-0.5 bg-gradient-to-r from-orange-500/50 to-transparent"></div>
+                <div className="absolute left-full top-12 hidden h-0.5 w-full bg-gradient-to-r from-orange-500/50 to-transparent lg:block"></div>
               )}
 
-              <div className="relative bg-neutral-900 border border-neutral-800 rounded-xl p-6 hover:border-orange-500/50 transition-all duration-300">
+              <div className="relative flex h-[280px] flex-col rounded-xl border border-neutral-800 bg-neutral-900 p-6 transition-all duration-300 hover:border-orange-500/50">
                 {/* Step Number */}
-                <div className="text-6xl font-bold text-orange-500/20 mb-4">{step.number}</div>
+                <div className="mb-4 text-6xl font-bold text-orange-500/20">{step.number}</div>
 
                 {/* Icon */}
-                <div className="w-12 h-12 bg-orange-500/10 rounded-lg flex items-center justify-center mb-4">
-                  <step.icon className="w-6 h-6 text-orange-500" />
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-orange-500/10">
+                  <step.icon className="h-6 w-6 text-orange-500" />
                 </div>
 
                 {/* Content */}
-                <h3 className="text-lg font-bold text-white mb-2">{step.title}</h3>
-                <p className="text-neutral-400 text-sm">{step.description}</p>
+                <h3 className="mb-2 text-lg font-bold text-white">{step.title}</h3>
+                <p className="text-sm text-neutral-400">{step.description}</p>
               </div>
             </div>
           ))}
         </div>
 
-        <div className="text-center mt-12">
+        <div className="mt-12 text-center">
           <Link href="/bridge">
             <Button
               size="lg"
-              className="bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20 transition-all duration-300 hover:scale-105 px-8"
+              className="bg-orange-500 px-8 text-white shadow-lg shadow-orange-500/20 transition-all duration-300 hover:scale-105 hover:bg-orange-600"
             >
               Try It Now
-              <ArrowRight className="ml-2 w-4 h-4" />
+              <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </Link>
         </div>

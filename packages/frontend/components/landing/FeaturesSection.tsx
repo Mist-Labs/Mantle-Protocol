@@ -44,37 +44,37 @@ export default function FeaturesSection() {
   ]
 
   return (
-    <section className="py-20 px-4 sm:px-6 bg-gradient-to-b from-black to-neutral-950">
-      <div className="max-w-7xl mx-auto">
-        <div className="text-center mb-16">
-          <Badge variant="outline" className="mb-4 border-orange-500/50 text-orange-500 tracking-wider">
+    <section className="bg-gradient-to-b from-black to-neutral-950 px-4 py-20 sm:px-6">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-16 text-center">
+          <Badge variant="outline" className="mb-4 border-orange-500/50 tracking-wider text-orange-500">
             FEATURES
           </Badge>
-          <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white mb-4">
+          <h2 className="mb-4 text-3xl font-bold text-white sm:text-4xl md:text-5xl">
             Built for <span className="text-orange-500">Privacy</span> & <span className="text-orange-500">Speed</span>
           </h2>
-          <p className="text-neutral-400 text-lg max-w-2xl mx-auto">
+          <p className="mx-auto max-w-2xl text-lg text-neutral-400">
             Combining zero-knowledge privacy with lightning-fast settlement through an intent-based solver network
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
           {features.map((feature, index) => (
             <div
               key={index}
-              className="group relative bg-neutral-900 border border-neutral-800 rounded-xl p-8 hover:border-orange-500/50 transition-all duration-300 hover:scale-105 overflow-hidden"
+              className="group relative overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900 p-8 transition-all duration-300 hover:scale-105 hover:border-orange-500/50"
             >
               {/* Gradient Background */}
               <div
-                className={`absolute inset-0 bg-gradient-to-br ${feature.gradient} opacity-0 group-hover:opacity-100 transition-opacity duration-300`}
+                className={`absolute inset-0 bg-gradient-to-br ${feature.gradient} opacity-0 transition-opacity duration-300 group-hover:opacity-100`}
               ></div>
 
               <div className="relative z-10">
-                <div className="w-12 h-12 bg-orange-500/10 rounded-lg flex items-center justify-center mb-4 group-hover:bg-orange-500/20 transition-colors">
-                  <feature.icon className="w-6 h-6 text-orange-500" />
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-orange-500/10 transition-colors group-hover:bg-orange-500/20">
+                  <feature.icon className="h-6 w-6 text-orange-500" />
                 </div>
-                <h3 className="text-xl font-bold text-white mb-3">{feature.title}</h3>
-                <p className="text-neutral-400 leading-relaxed">{feature.description}</p>
+                <h3 className="mb-3 text-xl font-bold text-white">{feature.title}</h3>
+                <p className="leading-relaxed text-neutral-400">{feature.description}</p>
               </div>
             </div>
           ))}
