@@ -140,7 +140,7 @@ export default function BridgeForm() {
                 value={fromNetwork.id.toString()}
                 onValueChange={(value) => setFromNetwork(NETWORKS.find((n) => n.id === parseInt(value))!)}
               >
-                <SelectTrigger className="border-neutral-700 bg-neutral-800 text-white">
+                <SelectTrigger className="h-20 border-neutral-700 bg-neutral-800 py-4 text-white">
                   <SelectValue>
                     <div className="flex items-center gap-3">
                       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500/10">
@@ -187,7 +187,7 @@ export default function BridgeForm() {
                 value={toNetwork.id.toString()}
                 onValueChange={(value) => setToNetwork(NETWORKS.find((n) => n.id === parseInt(value))!)}
               >
-                <SelectTrigger className="border-neutral-700 bg-neutral-800 text-white">
+                <SelectTrigger className="h-20 border-neutral-700 bg-neutral-800 py-4 text-white">
                   <SelectValue>
                     <div className="flex items-center gap-3">
                       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500/10">
