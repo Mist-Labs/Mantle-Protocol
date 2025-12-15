@@ -803,10 +803,11 @@ export default function DocsPage() {
                             <li key={item.id}>
                               <button
                                 onClick={() => setActiveSection(item.id)}
-                                className={`flex w-full items-center gap-3 rounded px-3 py-2 text-sm transition-colors ${activeSection === item.id
-                                  ? "bg-orange-500/10 font-medium text-orange-500"
-                                  : "text-neutral-400 hover:bg-neutral-800 hover:text-white"
-                                  }`}
+                                className={`flex w-full items-center gap-3 rounded px-3 py-2 text-sm transition-colors ${
+                                  activeSection === item.id
+                                    ? "bg-orange-500/10 font-medium text-orange-500"
+                                    : "text-neutral-400 hover:bg-neutral-800 hover:text-white"
+                                }`}
                               >
                                 <item.icon className="h-4 w-4 flex-shrink-0" />
                                 <span>{item.title}</span>
