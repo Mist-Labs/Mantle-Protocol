@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.20;
 
-import "../poseidonHasher.sol";
+import "../PoseidonHasher.sol";
 
 /**
  * @title Verifier
@@ -72,7 +72,7 @@ contract Verifier {
         bytes32[4] calldata inputs,
         bytes32 expectedCommitment
     ) external view returns (bool) {
-        bytes32 computed = verifyCommitment(inputs);
+        bytes32 computed = hasher.poseidon(inputs);
         return computed == expectedCommitment;
     }
 }
