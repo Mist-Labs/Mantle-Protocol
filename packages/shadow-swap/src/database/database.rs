@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
@@ -10,14 +10,14 @@ use dotenv::dotenv;
 use tracing::info;
 
 use crate::database::model::{
-    BridgeStats, DbBridgeEvent, DbChainTransaction, DbEthereumCommitment, DbEthereumIntentCreated,
-    DbMantleIntentCreated, DbMerkleNode, DbMerkleTree, NewBridgeEvent, NewChainTransaction,
-    NewEthereumCommitment, NewMerkleNode, NewMerkleTree,
+    BridgeStats, DbBridgeEvent, DbChainTransaction, DbEthereumIntentCreated, DbMantleIntentCreated,
+    DbMerkleNode, DbMerkleTree, NewBridgeEvent, NewChainTransaction, NewMerkleNode, NewMerkleTree,
 };
+
 use crate::models::model::{EthereumFill, EthereumIntent, MantleFill, MantleIntent};
 use crate::models::schema::{
     bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
-    mantle_sepolia_intent_created, merkle_tree_ethereum_commitments, root_syncs,
+    mantle_sepolia_intent_created, merkle_trees, root_syncs,
 };
 use crate::{
     database::model::{DbIntent, DbIntentPrivacyParams, NewIntent, NewIntentPrivacyParams},
@@ -28,6 +28,7 @@ use crate::{
 };
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+pub const TREE_DEPTH: i32 = 20;
 
 pub type DbPool = Pool<ConnectionManager<PgConnection>>;
 
@@ -646,9 +647,18 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_merkle_tree_by_name(&self, tree_name: &str) -> Result<Option<DbMerkleTree>> {
-        use crate::models::schema::merkle_trees;
+    pub fn ensure_merkle_tree(&self, tree_name: &str, depth: i32) -> Result<DbMerkleTree> {
+        if let Some(tree) = self.get_merkle_tree_by_name(tree_name)? {
+            return Ok(tree);
+        }
 
+        self.create_merkle_tree(tree_name, depth)?;
+
+        self.get_merkle_tree_by_name(tree_name)?
+            .ok_or_else(|| anyhow!("Failed to ensure merkle tree {}", tree_name))
+    }
+
+    pub fn get_merkle_tree_by_name(&self, tree_name: &str) -> Result<Option<DbMerkleTree>> {
         let mut conn = self.get_connection()?;
 
         let tree = merkle_trees::table
@@ -662,8 +672,6 @@ impl Database {
     }
 
     pub fn update_merkle_root(&self, tree_id: i32, root: &str) -> Result<()> {
-        use crate::models::schema::merkle_trees;
-
         let mut conn = self.get_connection()?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree_id)))
@@ -678,8 +686,6 @@ impl Database {
     }
 
     pub fn increment_leaf_count(&self, tree_id: i32, count: i64) -> Result<()> {
-        use crate::models::schema::merkle_trees;
-
         let mut conn = self.get_connection()?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree_id)))
@@ -691,6 +697,80 @@ impl Database {
             .context("Failed to increment leaf count")?;
 
         Ok(())
+    }
+
+    pub fn get_ethereum_commitment_tree_size(&self) -> Result<usize> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        Ok(tree.leaf_count as usize)
+    }
+
+    pub fn add_to_ethereum_commitment_tree(&self, _commitment: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        self.increment_leaf_count(tree.tree_id, 1)?;
+        Ok(())
+    }
+
+    pub fn set_ethereum_commitment_node(
+        &self,
+        level: usize,
+        index: usize,
+        hash: &str,
+    ) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
+        Ok(())
+    }
+
+    pub fn get_ethereum_commitment_node(
+        &self,
+        level: usize,
+        index: usize,
+    ) -> Result<Option<String>> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
+        Ok(node.map(|n| n.hash))
+    }
+
+    pub fn clear_ethereum_commitment_nodes(&self) -> Result<()> {
+        use crate::models::schema::merkle_nodes;
+
+        let mut conn = self.get_connection()?;
+
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
+            .execute(&mut conn)
+            .context("Failed to clear ethereum commitment nodes")?;
+
+        Ok(())
+    }
+
+    pub fn clear_ethereum_commitment_tree(&self) -> Result<()> {
+        use crate::models::schema::merkle_trees;
+
+        let mut conn = self.get_connection()?;
+
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        self.clear_ethereum_commitment_nodes()?;
+
+        diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
+            .set(merkle_trees::leaf_count.eq(0))
+            .execute(&mut conn)
+            .context("Failed to reset ethereum commitment tree leaf count")?;
+
+        Ok(())
+    }
+
+    pub fn get_ethereum_commitment_tree(&self) -> Result<Vec<String>> {
+        let _tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let commitments = self.get_all_ethereum_commitments()?;
+
+        Ok(commitments)
     }
 
     // ==================== Merkle Nodes ====================
@@ -784,6 +864,18 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_merkle_tree_by_name(&self, tree_name: &str) -> Result<()> {
+        use crate::models::schema::merkle_trees;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(merkle_trees::table.filter(merkle_trees::tree_name.eq(tree_name)))
+            .execute(&mut conn)
+            .context("Failed to delete merkle tree by name")?;
+
+        Ok(())
+    }
+
     // ==================== Merkle Tree Operations ====================
 
     /// Get Mantle tree leaves in order
@@ -792,9 +884,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         let nodes = merkle_nodes::table
             .filter(merkle_nodes::tree_id.eq(tree.tree_id))
@@ -813,9 +903,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         let nodes = merkle_nodes::table
             .filter(merkle_nodes::tree_id.eq(tree.tree_id))
@@ -830,27 +918,21 @@ impl Database {
 
     /// Get Mantle tree size (leaf count)
     pub fn get_mantle_tree_size(&self) -> Result<usize> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         Ok(tree.leaf_count as usize)
     }
 
     /// Get Ethereum tree size (leaf count)
     pub fn get_ethereum_tree_size(&self) -> Result<usize> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         Ok(tree.leaf_count as usize)
     }
 
     /// Add leaf to Mantle tree and increment counter
     pub fn add_to_mantle_tree(&self, _commitment: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         self.increment_leaf_count(tree.tree_id, 1)?;
         Ok(())
@@ -858,9 +940,7 @@ impl Database {
 
     /// Add leaf to Ethereum tree and increment counter
     pub fn add_to_ethereum_tree(&self, _intent_id: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         self.increment_leaf_count(tree.tree_id, 1)?;
         Ok(())
@@ -868,9 +948,7 @@ impl Database {
 
     /// Set Mantle node at specific level and index
     pub fn set_mantle_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
         Ok(())
@@ -878,9 +956,7 @@ impl Database {
 
     /// Set Ethereum node at specific level and index
     pub fn set_ethereum_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
         Ok(())
@@ -888,9 +964,7 @@ impl Database {
 
     /// Get Mantle node at specific level and index
     pub fn get_mantle_node(&self, level: usize, index: usize) -> Result<Option<String>> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
         Ok(node.map(|n| n.hash))
@@ -898,9 +972,7 @@ impl Database {
 
     /// Get Ethereum node at specific level and index
     pub fn get_ethereum_node(&self, level: usize, index: usize) -> Result<Option<String>> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
         Ok(node.map(|n| n.hash))
@@ -912,9 +984,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
             .set((
@@ -935,9 +1005,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
             .set((
@@ -958,9 +1026,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
             .execute(&mut conn)
@@ -974,9 +1040,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
             .execute(&mut conn)?;
@@ -1205,44 +1269,6 @@ impl Database {
             .collect();
 
         Ok(commitments)
-    }
-
-    pub fn add_to_ethereum_commitment_tree(&self, commitment: &str) -> Result<()> {
-        let mut conn = self.get_connection()?;
-
-        let new_commitment = NewEthereumCommitment {
-            commitment,
-            created_at: chrono::Utc::now(),
-        };
-
-        diesel::insert_into(merkle_tree_ethereum_commitments::table)
-            .values(&new_commitment)
-            .execute(&mut conn)
-            .context("Failed to insert ethereum commitment into merkle tree")?;
-
-        Ok(())
-    }
-
-    pub fn get_ethereum_commitment_tree(&self) -> Result<Vec<String>> {
-        let mut conn = self.get_connection()?;
-
-        let rows = merkle_tree_ethereum_commitments::table
-            .select(DbEthereumCommitment::as_select())
-            .order(merkle_tree_ethereum_commitments::created_at.asc())
-            .load::<DbEthereumCommitment>(&mut conn)
-            .context("Failed to load ethereum commitment tree")?;
-
-        Ok(rows.into_iter().map(|r| r.commitment).collect())
-    }
-
-    pub fn clear_ethereum_commitment_tree(&self) -> Result<()> {
-        let mut conn = self.get_connection()?;
-
-        diesel::delete(merkle_tree_ethereum_commitments::table)
-            .execute(&mut conn)
-            .context("Failed to clear ethereum commitment tree")?;
-
-        Ok(())
     }
 
     // ==================== Statistics ====================
