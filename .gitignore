@@ -37,3 +37,4 @@ debug.log
 dist/
 build/
 *.tsbuildinfo
+.vercel
