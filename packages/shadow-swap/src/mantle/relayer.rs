@@ -35,7 +35,10 @@ pub mod mantle_contracts {
             function claimWithdrawal(bytes32 intentId, bytes32 nullifier, address recipient, bytes32 secret, bytes calldata claimAuth) external
             function syncSourceChainRoot(uint32 chainId, bytes32 root) external
             function getMerkleRoot() external view returns (bytes32)
-        ]"#
+            function generateFillProof(bytes32 intentId) external view returns (bytes32[] memory)
+            function getFillTreeSize() external view returns (uint256)
+            function getFill(bytes32 intentId) external view returns (tuple(address solver, address token, uint256 amount, uint32 sourceChain, uint32 timestamp, bool claimed))
+       ]"#
     );
 }
 
@@ -182,7 +185,7 @@ impl MantleRelayer {
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
-    pub async fn fill_intent(
+    pub async fn execute_fill_intent(
         &self,
         intent_id: &str,
         commitment: &str,
@@ -341,7 +344,7 @@ impl MantleRelayer {
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
-    pub async fn mark_filled(
+    pub async fn execute_mark_filled(
         &self,
         intent_id: &str,
         merkle_path: &[String],
@@ -402,7 +405,7 @@ impl MantleRelayer {
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
-    pub async fn refund_intent(&self, intent_id: &str) -> Result<String> {
+    pub async fn execute_refund(&self, intent_id: &str) -> Result<String> {
         info!("♻️ Refunding intent on Mantle");
 
         let intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
@@ -456,7 +459,26 @@ impl MantleRelayer {
             .map_err(|e| anyhow!("Failed to log transaction: {}", e))
     }
 
-    pub async fn get_merkle_root(&self) -> Result<String> {
+    pub async fn get_fill_proof(&self, intent_id: &str) -> Result<Vec<String>> {
+        let intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
+            .map_err(|e| anyhow!("Invalid intent_id hex: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid intent_id length"))?;
+
+        let proof = self
+            .settlement
+            .generate_fill_proof(intent_id_bytes)
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get fill proof: {}", e))?;
+
+        Ok(proof
+            .iter()
+            .map(|p| format!("0x{}", hex::encode(p)))
+            .collect())
+    }
+
+    pub async fn get_fill_root(&self) -> Result<String> {
         let root = self
             .settlement
             .get_merkle_root()
@@ -467,7 +489,34 @@ impl MantleRelayer {
         Ok(format!("0x{}", hex::encode(root)))
     }
 
-    pub async fn sync_source_chain_root(&self, chain_id: u32, root: String) -> Result<String> {
+    pub async fn get_fill_index(&self, intent_id: &str) -> Result<u32> {
+        let _intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
+            .map_err(|e| anyhow!("Invalid intent_id hex: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid intent_id length"))?;
+
+        let tree_size = self
+            .settlement
+            .get_fill_tree_size()
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get tree size: {}", e))?;
+
+        Ok((tree_size.as_u64() - 1) as u32)
+    }
+
+    pub async fn get_fill_merkle_root(&self) -> Result<String> {
+        let root = self
+            .settlement
+            .get_merkle_root()
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get merkle root: {}", e))?;
+
+        Ok(format!("0x{}", hex::encode(root)))
+    }
+
+    pub async fn sync_source_root_tx(&self, chain_id: u32, root: String) -> Result<String> {
         info!("🌳 Syncing source chain {} root on Mantle", chain_id);
 
         let root_bytes: [u8; 32] = hex::decode(&root[2..])
@@ -496,7 +545,7 @@ impl MantleRelayer {
         Ok(tx_hash)
     }
 
-    pub async fn sync_dest_chain_root(&self, chain_id: u32, root: [u8; 32]) -> Result<String> {
+    pub async fn sync_dest_root_tx(&self, chain_id: u32, root: [u8; 32]) -> Result<String> {
         info!("🌳 Syncing dest chain {} root on Mantle", chain_id);
 
         let tx = self.intent_pool.sync_dest_chain_root(chain_id, root);
@@ -526,7 +575,11 @@ use crate::models::traits::ChainRelayer;
 
 impl ChainRelayer for MantleRelayer {
     fn get_merkle_root(&self) -> impl std::future::Future<Output = Result<String>> + Send {
-        async move { self.get_merkle_root().await.map_err(|e| anyhow::anyhow!(e)) }
+        async move {
+            self.get_fill_merkle_root()
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
+        }
     }
 
     fn sync_source_chain_root(
@@ -535,7 +588,7 @@ impl ChainRelayer for MantleRelayer {
         root: String,
     ) -> impl std::future::Future<Output = Result<String>> + Send {
         async move {
-            self.sync_source_chain_root(chain_id, root)
+            self.sync_source_root_tx(chain_id, root)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
@@ -547,7 +600,7 @@ impl ChainRelayer for MantleRelayer {
         root: [u8; 32],
     ) -> impl std::future::Future<Output = Result<String>> + Send {
         async move {
-            self.sync_dest_chain_root(chain_id, root)
+            self.sync_dest_root_tx(chain_id, root)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
@@ -572,7 +625,7 @@ impl ChainRelayer for MantleRelayer {
         let merkle_path = merkle_path.to_vec();
 
         async move {
-            self.fill_intent(
+            self.execute_fill_intent(
                 &intent_id,
                 &commitment,
                 source_chain,
@@ -618,7 +671,7 @@ impl ChainRelayer for MantleRelayer {
         let merkle_path = merkle_path.to_vec();
 
         async move {
-            self.mark_filled(&intent_id, &merkle_path, leaf_index)
+            self.execute_mark_filled(&intent_id, &merkle_path, leaf_index)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
@@ -631,7 +684,7 @@ impl ChainRelayer for MantleRelayer {
         let intent_id = intent_id.to_string();
 
         async move {
-            self.refund_intent(&intent_id)
+            self.execute_refund(&intent_id)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }

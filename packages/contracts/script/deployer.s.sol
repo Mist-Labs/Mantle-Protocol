@@ -60,36 +60,36 @@ contract DeployMantleContracts is Script {
         vm.startBroadcast(deployerPrivateKey);
         
         // Deploy PrivateIntentPool
-        console.log("Deploying PrivateIntentPool...");
-        PrivateIntentPool intentPool = new PrivateIntentPool(
-            owner,
-            relayer,
-            feeCollector,
-            poseidonHasher
-        );
-        console.log("PrivateIntentPool deployed at:", address(intentPool));
-        console.log("");
-        
-        // Deploy PrivateSettlement
-        // console.log("Deploying PrivateSettlement...");
-        // PrivateSettlement settlement = new PrivateSettlement(
+        // console.log("Deploying PrivateIntentPool...");
+        // PrivateIntentPool intentPool = new PrivateIntentPool(
         //     owner,
         //     relayer,
         //     feeCollector,
         //     poseidonHasher
         // );
-        // console.log("PrivateSettlement deployed at:", address(settlement));
+        // console.log("PrivateIntentPool deployed at:", address(intentPool));
         // console.log("");
+        
+        // Deploy PrivateSettlement
+        console.log("Deploying PrivateSettlement...");
+        PrivateSettlement settlement = new PrivateSettlement(
+            owner,
+            relayer,
+            feeCollector,
+            poseidonHasher
+        );
+        console.log("PrivateSettlement deployed at:", address(settlement));
+        console.log("");
         
         vm.stopBroadcast();
         
         console.log("=== MANTLE DEPLOYMENT SUMMARY ===");
-        console.log("PrivateIntentPool:", address(intentPool));
-        // console.log("PrivateSettlement:", address(settlement));
+        // console.log("PrivateIntentPool:", address(intentPool));
+        console.log("PrivateSettlement:", address(settlement));
         console.log("");
         console.log("Add to .env:");
-        console.log("MANTLE_INTENT_POOL_ADDRESS=", address(intentPool));
-        // console.log("MANTLE_SETTLEMENT_ADDRESS=", address(settlement));
+        // console.log("MANTLE_INTENT_POOL_ADDRESS=", address(intentPool));
+        console.log("MANTLE_SETTLEMENT_ADDRESS=", address(settlement));
     }
 }
 
@@ -118,35 +118,35 @@ contract DeployEthereumContracts is Script {
         vm.startBroadcast(deployerPrivateKey);
         
         // Deploy PrivateIntentPool
-        console.log("Deploying PrivateIntentPool...");
-        PrivateIntentPool intentPool = new PrivateIntentPool(
-            owner,
-            relayer,
-            feeCollector,
-            poseidonHasher
-        );
-        console.log("PrivateIntentPool deployed at:", address(intentPool));
-        console.log("");
-        
-        // Deploy PrivateSettlement
-        // console.log("Deploying PrivateSettlement...");
-        // PrivateSettlement settlement = new PrivateSettlement(
+        // console.log("Deploying PrivateIntentPool...");
+        // PrivateIntentPool intentPool = new PrivateIntentPool(
         //     owner,
         //     relayer,
         //     feeCollector,
         //     poseidonHasher
         // );
-        // console.log("PrivateSettlement deployed at:", address(settlement));
+        // console.log("PrivateIntentPool deployed at:", address(intentPool));
         // console.log("");
+        
+        // Deploy PrivateSettlement
+        console.log("Deploying PrivateSettlement...");
+        PrivateSettlement settlement = new PrivateSettlement(
+            owner,
+            relayer,
+            feeCollector,
+            poseidonHasher
+        );
+        console.log("PrivateSettlement deployed at:", address(settlement));
+        console.log("");
         
         vm.stopBroadcast();
         
         console.log("=== ETHEREUM DEPLOYMENT SUMMARY ===");
-        console.log("PrivateIntentPool:", address(intentPool));
-        // console.log("PrivateSettlement:", address(settlement));
+        // console.log("PrivateIntentPool:", address(intentPool));
+        console.log("PrivateSettlement:", address(settlement));
         console.log("");
         console.log("Add to .env:");
-        console.log("ETHEREUM_INTENT_POOL_ADDRESS=", address(intentPool));
-        // console.log("ETHEREUM_SETTLEMENT_ADDRESS=", address(settlement));
+        // console.log("ETHEREUM_INTENT_POOL_ADDRESS=", address(intentPool));
+        console.log("ETHEREUM_SETTLEMENT_ADDRESS=", address(settlement));
     }
 }

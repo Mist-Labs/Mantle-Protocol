@@ -7,6 +7,7 @@ mod merkle_manager;
 mod models;
 mod pricefeed;
 mod relay_coordinator;
+mod root_sync_coordinator;
 
 use std::sync::Arc;
 
@@ -18,10 +19,11 @@ use tracing::{error, info};
 
 use crate::{
     database::database::Database,
-    merkle_manager::merkletreemanager::MerkleTreeManager,
+    merkle_manager::merkle_manager::MerkleTreeManager,
     models::model::BridgeConfig,
     pricefeed::pricefeed::PriceFeedManager,
     relay_coordinator::model::{BridgeCoordinator, EthereumRelayer, MantleRelayer, SecretMonitor},
+    root_sync_coordinator::root_sync_coordinator::RootSyncCoordinator,
 };
 
 pub struct AppState {
@@ -33,6 +35,7 @@ pub struct AppState {
     pub merkle_manager: Arc<MerkleTreeManager>,
     pub price_feed: Arc<PriceFeedManager>,
     pub secret_monitor: Arc<SecretMonitor>,
+    pub root_sync_coordinator: Arc<RootSyncCoordinator>,
 }
 
 #[actix_web::main]
@@ -100,6 +103,14 @@ async fn main() -> Result<()> {
         merkle_manager.clone(),
     ));
 
+    info!("🔄 Initializing root sync coordinator");
+    let root_sync_coordinator = Arc::new(RootSyncCoordinator::new(
+        database.clone(),
+        ethereum_relayer.clone(),
+        mantle_relayer.clone(),
+        60,
+    ));
+
     let app_state = web::Data::new(AppState {
         database,
         config: config.clone(),
@@ -109,6 +120,7 @@ async fn main() -> Result<()> {
         merkle_manager: merkle_manager.clone(),
         price_feed,
         secret_monitor: secret_monitor.clone(),
+        root_sync_coordinator: root_sync_coordinator.clone(),
     });
 
     info!("🌳 Starting Merkle Tree Manager service");
@@ -138,6 +150,14 @@ async fn main() -> Result<()> {
             if let Err(e) = coordinator.start().await {
                 error!("❌ Bridge coordinator error: {}", e);
             }
+        }
+    });
+
+    info!("🔄 Starting root sync coordinator service");
+    let root_sync_handle = task::spawn({
+        let coordinator = root_sync_coordinator.clone();
+        async move {
+            coordinator.run().await;
         }
     });
 
@@ -178,6 +198,7 @@ async fn main() -> Result<()> {
         _ = monitor_handle => error!("Secret monitor stopped unexpectedly"),
         _ = tree_manager_handle => error!("Merkle Tree Manager stopped unexpectedly"),
         _ = coordinator_handle => error!("Bridge coordinator stopped unexpectedly"),
+        _ = root_sync_handle => error!("Root sync coordinator stopped unexpectedly"),
     }
 
     Ok(())

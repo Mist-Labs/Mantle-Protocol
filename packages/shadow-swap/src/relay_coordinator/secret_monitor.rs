@@ -136,7 +136,7 @@ impl SecretMonitor {
 
     async fn check_ethereum_withdrawal_event(
         &self,
-        intent_id: &str,
+        _intent_id: &str,
         nullifier: &str,
     ) -> Result<Option<(String, String)>> {
         let event =
@@ -275,7 +275,7 @@ impl SecretMonitor {
 
     async fn check_mantle_withdrawal_event(
         &self,
-        intent_id: &str,
+        _intent_id: &str,
         nullifier: &str,
     ) -> Result<Option<(String, String)>> {
         // Query indexer for WithdrawalClaimed event

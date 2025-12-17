@@ -9,7 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     database::database::Database,
-    merkle_manager::merkletreemanager::MerkleTreeManager,
+    merkle_manager::merkle_manager::MerkleTreeManager,
     models::{
         model::{
             BridgeDirection, BridgeMetrics, Intent, IntentOperationState, IntentStatus,
@@ -19,6 +19,9 @@ use crate::{
     },
     relay_coordinator::model::{BridgeCoordinator, EthereumRelayer, MantleRelayer},
 };
+
+const MANTLE_CHAIN_ID: u32 = 5003;
+const ETHEREUM_CHAIN_ID: u32 = 11155111;
 
 impl TokenType {
     pub fn from_address(address: &str) -> Result<Self> {
@@ -201,7 +204,12 @@ impl BridgeCoordinator {
             }
         });
 
-        self.start_merkle_sync_tasks();
+        let merkle_manager = Arc::clone(&self.merkle_tree_manager);
+        tokio::spawn(async move {
+            if let Err(e) = merkle_manager.start().await {
+                error!("❌ Merkle manager failed: {}", e);
+            }
+        });
 
         loop {
             if let Err(e) = self.process_pending_intents().await {
@@ -211,45 +219,6 @@ impl BridgeCoordinator {
 
             sleep(Duration::from_secs(10)).await;
         }
-    }
-
-    fn start_merkle_sync_tasks(&self) {
-        let eth_relayer = Arc::clone(&self.ethereum_relayer);
-        let mantle_relayer = Arc::clone(&self.mantle_relayer);
-
-        tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                if let Err(e) = Self::sync_source_to_dest(&eth_relayer, &mantle_relayer, 1).await {
-                    error!("Failed to sync Ethereum->Mantle root: {}", e);
-                }
-            }
-        });
-
-        let eth_relayer = Arc::clone(&self.ethereum_relayer);
-        let mantle_relayer = Arc::clone(&self.mantle_relayer);
-
-        tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                if let Err(e) = Self::sync_source_to_dest(&mantle_relayer, &eth_relayer, 5000).await
-                {
-                    error!("Failed to sync Mantle->Ethereum root: {}", e);
-                }
-            }
-        });
-    }
-
-    async fn sync_source_to_dest<S, D>(source: &Arc<S>, dest: &Arc<D>, chain_id: u32) -> Result<()>
-    where
-        S: ChainRelayer,
-        D: ChainRelayer,
-    {
-        let root = source.get_merkle_root().await?;
-        dest.sync_source_chain_root(chain_id, root).await?;
-        Ok(())
     }
 
     async fn process_pending_intents(&self) -> Result<()> {
@@ -348,11 +317,15 @@ impl BridgeCoordinator {
                 .commitment
                 .ok_or_else(|| anyhow!("Missing commitment"))?;
 
-            let source_root = self.ethereum_relayer.get_merkle_root().await?;
+            // ✅ Get off-chain computed Ethereum commitment tree root
+            let source_root = self
+                .merkle_tree_manager
+                .compute_ethereum_commitment_root()?;
 
+            // ✅ Generate proof from off-chain Ethereum commitment tree
             let merkle_proof = self
                 .merkle_tree_manager
-                .generate_ethereum_proof(&intent.id)
+                .generate_ethereum_commitment_proof(&commitment)
                 .await?;
 
             let result = self
@@ -360,15 +333,12 @@ impl BridgeCoordinator {
                 .fill_intent(
                     &intent.id,
                     &commitment,
-                    1,
+                    ETHEREUM_CHAIN_ID, // Source chain
                     &token_info.dest_address,
                     &intent.amount,
-                    &source_root,
+                    &source_root, // Ethereum commitment tree root
                     &merkle_proof.path,
-                    merkle_proof
-                        .leaf_index
-                        .try_into()
-                        .map_err(|_| anyhow!("Leaf index too large for u32"))?,
+                    merkle_proof.leaf_index.try_into()?,
                 )
                 .await;
 
@@ -381,6 +351,8 @@ impl BridgeCoordinator {
                     self.database
                         .update_intent_status(&intent.id, IntentStatus::Filled)
                         .map_err(|e| anyhow!("Failed to update status: {}", e))?;
+
+                    // ✅ NO NEED to append to fill tree - contract does it automatically
 
                     let mut metrics = self.metrics.write().await;
                     metrics.mantle_fills += 1;
@@ -436,11 +408,11 @@ impl BridgeCoordinator {
                 .commitment
                 .ok_or_else(|| anyhow!("Missing commitment"))?;
 
-            let source_root = self.mantle_relayer.get_merkle_root().await?;
+            let source_root = self.merkle_tree_manager.compute_mantle_commitment_root()?;
 
             let merkle_proof = self
                 .merkle_tree_manager
-                .generate_mantle_proof(&intent.id)
+                .generate_mantle_proof(&commitment)
                 .await?;
 
             let result = self
@@ -448,15 +420,12 @@ impl BridgeCoordinator {
                 .fill_intent(
                     &intent.id,
                     &commitment,
-                    5000,
+                    MANTLE_CHAIN_ID,
                     &token_info.dest_address,
                     &intent.amount,
-                    &source_root,
+                    &source_root, // Mantle commitment tree root
                     &merkle_proof.path,
-                    merkle_proof
-                        .leaf_index
-                        .try_into()
-                        .map_err(|_| anyhow!("Leaf index too large for u32"))?,
+                    merkle_proof.leaf_index.try_into()?,
                 )
                 .await;
 
@@ -469,6 +438,8 @@ impl BridgeCoordinator {
                     self.database
                         .update_intent_status(&intent.id, IntentStatus::Filled)
                         .map_err(|e| anyhow!("Failed to update status: {}", e))?;
+
+                    // ✅ NO NEED to append to fill tree - contract does it automatically
 
                     let mut metrics = self.metrics.write().await;
                     metrics.ethereum_fills += 1;
@@ -658,23 +629,14 @@ impl BridgeCoordinator {
         intent: &Intent,
         token_info: &TokenBridgeInfo,
     ) -> Result<()> {
-        let dest_root = self.mantle_relayer.get_merkle_root().await?;
+        // ✅ Get proof from Mantle Settlement contract (on-chain)
+        let merkle_proof = self.mantle_relayer.get_fill_proof(&intent.id).await?;
 
-        let merkle_proof = self
-            .merkle_tree_manager
-            .generate_mantle_proof(&intent.source_commitment.as_ref().unwrap())
-            .await?;
+        let leaf_index = self.mantle_relayer.get_fill_index(&intent.id).await?;
 
         let result = self
             .ethereum_relayer
-            .mark_filled(
-                &intent.id,
-                &merkle_proof.path,
-                merkle_proof
-                    .leaf_index
-                    .try_into()
-                    .map_err(|_| anyhow!("Leaf index too large for u32"))?,
-            )
+            .mark_filled(&intent.id, &merkle_proof, leaf_index)
             .await;
 
         match result {
@@ -709,23 +671,14 @@ impl BridgeCoordinator {
         intent: &Intent,
         token_info: &TokenBridgeInfo,
     ) -> Result<()> {
-        let dest_root = self.ethereum_relayer.get_merkle_root().await?;
+        // ✅ Get proof from Ethereum Settlement contract (on-chain)
+        let merkle_proof = self.ethereum_relayer.get_fill_proof(&intent.id).await?;
 
-        let merkle_proof = self
-            .merkle_tree_manager
-            .generate_ethereum_proof(&intent.source_commitment.as_ref().unwrap())
-            .await?;
+        let leaf_index = self.ethereum_relayer.get_fill_index(&intent.id).await?;
 
         let result = self
             .mantle_relayer
-            .mark_filled(
-                &intent.id,
-                &merkle_proof.path,
-                merkle_proof
-                    .leaf_index
-                    .try_into()
-                    .map_err(|_| anyhow!("Leaf index too large for u32"))?,
-            )
+            .mark_filled(&intent.id, &merkle_proof, leaf_index.try_into()?)
             .await;
 
         match result {
