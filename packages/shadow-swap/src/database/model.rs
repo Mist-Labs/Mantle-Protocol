@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::models::{
     model::{Intent, IntentPrivacyParams, IntentStatus},
     schema::{
-        bridge_events, chain_transactions, indexer_checkpoints, intent_privacy_params, intents,
-        merkle_nodes, merkle_roots, merkle_trees,
+        bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints, intent_privacy_params, intents, mantle_sepolia_intent_created, merkle_nodes, merkle_roots, merkle_tree_ethereum_commitments, merkle_trees
     },
 };
 
@@ -222,8 +221,8 @@ pub struct NewMerkleNode<'a> {
 #[diesel(table_name = merkle_roots)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct DbMerkleRoot {
-    pub tree_id: String,
-    pub root_hash: String,
+    pub tree_id: i32,
+    pub root: String,
     pub leaf_count: i64,
     pub updated_at: DateTime<Utc>,
 }
@@ -231,10 +230,56 @@ pub struct DbMerkleRoot {
 #[derive(Insertable, Debug)]
 #[diesel(table_name = merkle_roots)]
 pub struct NewMerkleRoot<'a> {
-    pub tree_id: &'a str,
-    pub root_hash: &'a str,
+    pub tree_id: i32,
+    pub root: &'a str,
     pub leaf_count: i64,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = ethereum_sepolia_intent_created)]
+pub struct DbEthereumIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = mantle_sepolia_intent_created)]
+pub struct DbMantleIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = merkle_tree_ethereum_commitments)]
+pub struct DbEthereumCommitment {
+    pub commitment: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = merkle_tree_ethereum_commitments)]
+pub struct NewEthereumCommitment<'a> {
+    pub commitment: &'a str,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = ethereum_sepolia_intent_created)]
+pub struct NewEthereumIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = mantle_sepolia_intent_created)]
+pub struct NewMantleIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
 }
 
 impl IntentStatus {

@@ -10,11 +10,15 @@ use dotenv::dotenv;
 use tracing::info;
 
 use crate::database::model::{
-    BridgeStats, DbBridgeEvent, DbChainTransaction, DbMerkleNode, DbMerkleTree, NewBridgeEvent,
-    NewChainTransaction, NewMerkleNode, NewMerkleTree,
+    BridgeStats, DbBridgeEvent, DbChainTransaction, DbEthereumCommitment, DbEthereumIntentCreated,
+    DbMantleIntentCreated, DbMerkleNode, DbMerkleTree, NewBridgeEvent, NewChainTransaction,
+    NewEthereumCommitment, NewMerkleNode, NewMerkleTree,
 };
 use crate::models::model::{EthereumFill, EthereumIntent, MantleFill, MantleIntent};
-use crate::models::schema::{bridge_events, chain_transactions, indexer_checkpoints};
+use crate::models::schema::{
+    bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
+    mantle_sepolia_intent_created, merkle_tree_ethereum_commitments, root_syncs,
+};
 use crate::{
     database::model::{DbIntent, DbIntentPrivacyParams, NewIntent, NewIntentPrivacyParams},
     models::{
@@ -981,7 +985,7 @@ impl Database {
     }
 
     pub fn record_root(&self, chain: &str, root: &str) -> Result<()> {
-        let mut conn = self.get_connection()?;
+        // let mut conn = self.get_connection()?;
 
         let tree = self
             .get_merkle_tree_by_name(chain)?
@@ -990,6 +994,20 @@ impl Database {
         self.update_merkle_root(tree.tree_id, root)?;
 
         Ok(())
+    }
+
+    pub fn get_last_synced_root_by_type(&self, sync_type: &str) -> Result<Option<String>> {
+        let mut conn = self.get_connection()?;
+
+        let result = root_syncs::table
+            .filter(root_syncs::sync_type.eq(sync_type))
+            .order(root_syncs::created_at.desc())
+            .select(root_syncs::root)
+            .first::<String>(&mut conn)
+            .optional()
+            .context("Failed to fetch last synced root by type")?;
+
+        Ok(result)
     }
 
     pub fn get_latest_root(&self, chain: &str) -> Result<Option<String>> {
@@ -1147,6 +1165,84 @@ impl Database {
             .collect();
 
         Ok(fills)
+    }
+
+    pub fn get_all_ethereum_commitments(&self) -> Result<Vec<String>> {
+        let mut conn = self.get_connection()?;
+
+        let rows = ethereum_sepolia_intent_created::table
+            .select(DbEthereumIntentCreated::as_select())
+            .order((
+                ethereum_sepolia_intent_created::block_number.asc(),
+                ethereum_sepolia_intent_created::log_index.asc(),
+            ))
+            .load::<DbEthereumIntentCreated>(&mut conn)
+            .context("Failed to load ethereum intent created events")?;
+
+        let commitments = rows
+            .into_iter()
+            .filter_map(|row| row.event_data.get("commitment")?.as_str().map(String::from))
+            .collect();
+
+        Ok(commitments)
+    }
+
+    pub fn get_all_mantle_commitments(&self) -> Result<Vec<String>> {
+        let mut conn = self.get_connection()?;
+
+        let rows = mantle_sepolia_intent_created::table
+            .select(DbMantleIntentCreated::as_select())
+            .order((
+                mantle_sepolia_intent_created::block_number.asc(),
+                mantle_sepolia_intent_created::log_index.asc(),
+            ))
+            .load::<DbMantleIntentCreated>(&mut conn)
+            .context("Failed to load mantle intent created events")?;
+
+        let commitments = rows
+            .into_iter()
+            .filter_map(|row| row.event_data.get("commitment")?.as_str().map(String::from))
+            .collect();
+
+        Ok(commitments)
+    }
+
+    pub fn add_to_ethereum_commitment_tree(&self, commitment: &str) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        let new_commitment = NewEthereumCommitment {
+            commitment,
+            created_at: chrono::Utc::now(),
+        };
+
+        diesel::insert_into(merkle_tree_ethereum_commitments::table)
+            .values(&new_commitment)
+            .execute(&mut conn)
+            .context("Failed to insert ethereum commitment into merkle tree")?;
+
+        Ok(())
+    }
+
+    pub fn get_ethereum_commitment_tree(&self) -> Result<Vec<String>> {
+        let mut conn = self.get_connection()?;
+
+        let rows = merkle_tree_ethereum_commitments::table
+            .select(DbEthereumCommitment::as_select())
+            .order(merkle_tree_ethereum_commitments::created_at.asc())
+            .load::<DbEthereumCommitment>(&mut conn)
+            .context("Failed to load ethereum commitment tree")?;
+
+        Ok(rows.into_iter().map(|r| r.commitment).collect())
+    }
+
+    pub fn clear_ethereum_commitment_tree(&self) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(merkle_tree_ethereum_commitments::table)
+            .execute(&mut conn)
+            .context("Failed to clear ethereum commitment tree")?;
+
+        Ok(())
     }
 
     // ==================== Statistics ====================

@@ -29,6 +29,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    ethereum_sepolia_intent_created (id) {
+        id -> Int4,
+        event_data -> Jsonb,
+        block_number -> Int8,
+        log_index -> Int4,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     indexer_checkpoints (chain) {
         chain -> Text,
         last_block -> Int4,
@@ -78,6 +88,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    mantle_sepolia_intent_created (id) {
+        id -> Int4,
+        event_data -> Jsonb,
+        block_number -> Int8,
+        log_index -> Int4,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     merkle_nodes (node_id) {
         node_id -> Int4,
         tree_id -> Int4,
@@ -91,10 +111,19 @@ diesel::table! {
 
 diesel::table! {
     merkle_roots (tree_id) {
-        tree_id -> Text,
-        root_hash -> Text,
+        tree_id -> Int4,
+        root -> Text,
         leaf_count -> Int8,
         updated_at -> Timestamptz,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    merkle_tree_ethereum_commitments (id) {
+        id -> Int4,
+        commitment -> Text,
+        created_at -> Timestamptz,
     }
 }
 
@@ -110,6 +139,16 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    root_syncs (id) {
+        id -> Int4,
+        sync_type -> Text,
+        root -> Text,
+        tx_hash -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
 diesel::joinable!(bridge_events -> intents (intent_id));
 diesel::joinable!(chain_transactions -> intents (intent_id));
 diesel::joinable!(intent_privacy_params -> intents (intent_id));
@@ -118,10 +157,14 @@ diesel::joinable!(merkle_nodes -> merkle_trees (tree_id));
 diesel::allow_tables_to_appear_in_same_query!(
     bridge_events,
     chain_transactions,
+    ethereum_sepolia_intent_created,
     indexer_checkpoints,
     intent_privacy_params,
     intents,
+    mantle_sepolia_intent_created,
     merkle_nodes,
     merkle_roots,
+    merkle_tree_ethereum_commitments,
     merkle_trees,
+    root_syncs,
 );

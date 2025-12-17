@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time;
 
 use tokio::sync::RwLock;
-use crate::{database::database::Database, ethereum::relayer::{EthClient, ethereum_contracts}, mantle::relayer::{MantleClient, mantle_contracts}, merkle_manager::merkletreemanager::MerkleTreeManager, models::model::{DatabaseConfig, ServerConfig}};
+use crate::{database::database::Database, ethereum::relayer::{EthClient, ethereum_contracts}, mantle::relayer::{MantleClient, mantle_contracts}, merkle_manager::merkle_manager::MerkleTreeManager, models::model::{DatabaseConfig, ServerConfig}};
 use crate::models::model::{BridgeMetrics, IntentOperationState};
 
 pub struct BridgeCoordinator {

@@ -2,10 +2,14 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    ReentrancyGuard
+} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {
+    MessageHashUtils
+} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {IPoseidonHasher} from "./interface.sol";
 
 /**
@@ -373,6 +377,10 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
 
     function getFill(bytes32 intentId) external view returns (Fill memory) {
         return fills[intentId];
+    }
+
+    function getFillIndex(bytes32 intentId) external view returns (uint256) {
+        return fillIndex[intentId];
     }
 
     function isNullifierUsed(bytes32 nullifier) external view returns (bool) {
