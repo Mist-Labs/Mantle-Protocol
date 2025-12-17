@@ -352,7 +352,7 @@ impl BridgeCoordinator {
                         .update_intent_status(&intent.id, IntentStatus::Filled)
                         .map_err(|e| anyhow!("Failed to update status: {}", e))?;
 
-                    // ✅ NO NEED to append to fill tree - contract does it automatically
+               
 
                     let mut metrics = self.metrics.write().await;
                     metrics.mantle_fills += 1;
@@ -439,7 +439,6 @@ impl BridgeCoordinator {
                         .update_intent_status(&intent.id, IntentStatus::Filled)
                         .map_err(|e| anyhow!("Failed to update status: {}", e))?;
 
-                    // ✅ NO NEED to append to fill tree - contract does it automatically
 
                     let mut metrics = self.metrics.write().await;
                     metrics.ethereum_fills += 1;
