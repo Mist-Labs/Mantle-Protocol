@@ -15,13 +15,13 @@
       "abi": "IntentPool",
       "address": "0x8e9080d32ae8864Af25D3fB59D28De74e7872b1d",
       "chain": "mantle-sepolia",
-      "startBlock": 0
+      "startBlock": 32216218
     },
     {
       "abi": "Settlement",
-      "address": "0x28650373758d75a8fF0B22587F111e47BAC34e21",
+      "address": "0x985bD8f2348aB4b6d6279CA943ddcB932bAE0Bbd",
       "chain": "mantle-sepolia",
-      "startBlock": 0
+      "startBlock": 32216218
     }
   ]
 }
