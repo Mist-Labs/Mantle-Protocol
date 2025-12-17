@@ -38,3 +38,4 @@ dist/
 build/
 *.tsbuildinfo
 .vercel
+yarn.lock
