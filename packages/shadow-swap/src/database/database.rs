@@ -141,6 +141,7 @@ impl Database {
             dest_amount: &intent.dest_amount,
             source_commitment: intent.source_commitment.as_deref(),
             dest_fill_txid: intent.dest_fill_txid.as_deref(),
+            dest_registration_txid: intent.dest_registration_txid.as_deref(),
             source_complete_txid: intent.source_complete_txid.as_deref(),
             status: intent.status.as_str(),
             created_at: intent.created_at,
@@ -176,6 +177,7 @@ impl Database {
                 dest_amount: &intent.dest_amount,
                 source_commitment: intent.source_commitment.as_deref(),
                 dest_fill_txid: intent.dest_fill_txid.as_deref(),
+                dest_registration_txid: intent.dest_registration_txid.as_deref(),
                 source_complete_txid: intent.source_complete_txid.as_deref(),
                 status: intent.status.as_str(),
                 created_at: intent.created_at,
@@ -392,6 +394,7 @@ impl Database {
             dest_amount: &intent.dest_amount,
             source_commitment: intent.source_commitment.as_deref(),
             dest_fill_txid: intent.dest_fill_txid.as_deref(),
+            dest_registration_txid: intent.dest_fill_txid.as_deref(),
             source_complete_txid: intent.source_complete_txid.as_deref(),
             status: intent.status.as_str(),
             created_at: intent.created_at,
@@ -451,6 +454,22 @@ impl Database {
             block_number,
             tx_hash,
         )
+    }
+
+    pub fn update_dest_registration_txid(
+        &self,
+        intent_id: &str,
+        txid: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::models::schema::intents::dsl::*;
+
+        let mut conn = self.pool.get()?;
+
+        diesel::update(intents.filter(id.eq(intent_id)))
+            .set(dest_registration_txid.eq(Some(txid)))
+            .execute(&mut conn)?;
+
+        Ok(())
     }
 
     pub fn record_nullifier_usage(
@@ -1372,6 +1391,7 @@ fn db_intent_to_model(r: DbIntent) -> Intent {
         dest_amount: r.dest_amount,
         source_commitment: r.source_commitment,
         dest_fill_txid: r.dest_fill_txid,
+        dest_registration_txid: r.dest_registration_txid,
         source_complete_txid: r.source_complete_txid,
         status: parse_status(&r.status),
         created_at: r.created_at,
