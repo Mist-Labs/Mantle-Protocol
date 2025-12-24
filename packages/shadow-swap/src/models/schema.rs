@@ -84,6 +84,8 @@ diesel::table! {
         source_complete_txid -> Nullable<Varchar>,
         #[max_length = 42]
         refund_address -> Nullable<Varchar>,
+        #[max_length = 66]
+        dest_registration_txid -> Nullable<Varchar>,
     }
 }
 

@@ -68,6 +68,7 @@ pub struct Intent {
     pub dest_amount: String,
     pub source_commitment: Option<String>,
     pub dest_fill_txid: Option<String>,
+    pub dest_registration_txid: Option<String>,
     pub source_complete_txid: Option<String>,
     pub status: IntentStatus,
     pub created_at: DateTime<Utc>,

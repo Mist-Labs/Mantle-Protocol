@@ -317,17 +317,6 @@ impl BridgeCoordinator {
                 .commitment
                 .ok_or_else(|| anyhow!("Missing commitment"))?;
 
-            // ✅ Get off-chain computed Ethereum commitment tree root
-            let source_root = self
-                .merkle_tree_manager
-                .compute_ethereum_commitment_root()?;
-
-            // ✅ Generate proof from off-chain Ethereum commitment tree
-            let merkle_proof = self
-                .merkle_tree_manager
-                .generate_ethereum_commitment_proof(&commitment)
-                .await?;
-
             let result = self
                 .mantle_relayer
                 .fill_intent(
@@ -336,9 +325,6 @@ impl BridgeCoordinator {
                     ETHEREUM_CHAIN_ID, // Source chain
                     &token_info.dest_address,
                     &intent.amount,
-                    &source_root, // Ethereum commitment tree root
-                    &merkle_proof.path,
-                    merkle_proof.leaf_index.try_into()?,
                 )
                 .await;
 
@@ -351,8 +337,6 @@ impl BridgeCoordinator {
                     self.database
                         .update_intent_status(&intent.id, IntentStatus::Filled)
                         .map_err(|e| anyhow!("Failed to update status: {}", e))?;
-
-               
 
                     let mut metrics = self.metrics.write().await;
                     metrics.mantle_fills += 1;
@@ -408,13 +392,6 @@ impl BridgeCoordinator {
                 .commitment
                 .ok_or_else(|| anyhow!("Missing commitment"))?;
 
-            let source_root = self.merkle_tree_manager.compute_mantle_commitment_root()?;
-
-            let merkle_proof = self
-                .merkle_tree_manager
-                .generate_mantle_proof(&commitment)
-                .await?;
-
             let result = self
                 .ethereum_relayer
                 .fill_intent(
@@ -423,9 +400,6 @@ impl BridgeCoordinator {
                     MANTLE_CHAIN_ID,
                     &token_info.dest_address,
                     &intent.amount,
-                    &source_root, // Mantle commitment tree root
-                    &merkle_proof.path,
-                    merkle_proof.leaf_index.try_into()?,
                 )
                 .await;
 
@@ -438,7 +412,6 @@ impl BridgeCoordinator {
                     self.database
                         .update_intent_status(&intent.id, IntentStatus::Filled)
                         .map_err(|e| anyhow!("Failed to update status: {}", e))?;
-
 
                     let mut metrics = self.metrics.write().await;
                     metrics.ethereum_fills += 1;

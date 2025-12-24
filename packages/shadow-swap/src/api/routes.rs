@@ -126,6 +126,7 @@ pub async fn initiate_bridge(
         dest_amount: dest_amount.to_string(),
         source_commitment: Some(request.commitment.clone()),
         dest_fill_txid: None,
+        dest_registration_txid: None,
         source_complete_txid: None,
         status: IntentStatus::Created,
         created_at: Utc::now(),
