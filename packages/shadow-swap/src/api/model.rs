@@ -19,6 +19,10 @@ pub struct InitiateBridgeRequest {
     pub amount: String,
     pub commitment: String,
     pub refund_address: String,
+    pub secret: String,           
+    pub nullifier: String,        
+    pub claim_auth: String,      
+    pub recipient: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -64,6 +64,36 @@ pub async fn initiate_bridge(
         });
     }
 
+    if !request.secret.starts_with("0x") || request.secret.len() != 66 {
+        return HttpResponse::BadRequest().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: String::new(),
+            commitment: String::new(),
+            message: "Invalid secret format".to_string(),
+            error: Some("Secret must be 32-byte hex string".to_string()),
+        });
+    }
+
+    if !request.nullifier.starts_with("0x") || request.nullifier.len() != 66 {
+        return HttpResponse::BadRequest().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: String::new(),
+            commitment: String::new(),
+            message: "Invalid nullifier format".to_string(),
+            error: Some("Nullifier must be 32-byte hex string".to_string()),
+        });
+    }
+
+    if !request.claim_auth.starts_with("0x") || request.claim_auth.len() != 132 {
+        return HttpResponse::BadRequest().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: String::new(),
+            commitment: String::new(),
+            message: "Invalid claim_auth format".to_string(),
+            error: Some("Claim authorization must be 65-byte hex signature".to_string()),
+        });
+    }
+
     info!(
         "🌉 Initiating bridge | Direction: {} -> {} | Token: {} | Amount: {}",
         request.source_chain, request.dest_chain, request.source_token, request.amount
@@ -142,6 +172,24 @@ pub async fn initiate_bridge(
             intent_id: intent_id.clone(),
             commitment: String::new(),
             message: "Failed to initialize bridge intent".to_string(),
+            error: Some(e.to_string()),
+        });
+    }
+
+    if let Err(e) = app_state.database.store_intent_privacy_params(
+        &intent_id,
+        &request.commitment,
+        &request.secret,
+        &request.nullifier,
+        &request.claim_auth,
+        &request.recipient,
+    ) {
+        error!("Failed to store privacy params for {}: {}", intent_id, e);
+        return HttpResponse::InternalServerError().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: intent_id.clone(),
+            commitment: String::new(),
+            message: "Failed to store privacy parameters".to_string(),
             error: Some(e.to_string()),
         });
     }

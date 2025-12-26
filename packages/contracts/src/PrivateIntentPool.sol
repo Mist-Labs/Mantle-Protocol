@@ -58,17 +58,17 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         bytes32 indexed intentId,
         bytes32 indexed commitment,
         uint32 destChain,
-        uint256 amount,
-        address token
+        address token,
+        uint256 amount
     );
     event IntentFilled(
         bytes32 indexed intentId,
         address indexed solver,
+        address indexed token,
         uint256 amount
     );
     event IntentRefunded(
         bytes32 indexed intentId,
-        address indexed refundTo,
         uint256 amount
     );
     event RootSynced(uint32 indexed chainId, bytes32 root);
@@ -193,7 +193,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             }
         }
 
-        emit IntentCreated(intentId, commitment, destChain, amount, token);
+        emit IntentCreated(intentId, commitment, destChain, token, amount);
         emit MerkleRootUpdated(_computeMerkleRoot());
     }
 
@@ -259,7 +259,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             }
         }
 
-        emit IntentFilled(intentId, msg.sender, solverAmount);
+        emit IntentFilled(intentId, msg.sender, intent.token, solverAmount);
     }
 
     /**
@@ -314,7 +314,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             }
         }
 
-        emit IntentRefunded(intentId, intent.refundTo, intent.amount);
+        emit IntentRefunded(intentId, intent.amount);
     }
 
     /**
