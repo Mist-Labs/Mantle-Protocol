@@ -7,7 +7,15 @@ import {PrivateIntentPool} from "../src/PrivateIntentPool.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockERC20 is ERC20 {
-    constructor() ERC20("Mock Token", "MOCK") {}
+    uint8 private _decimals;
+
+    constructor() ERC20("Mock Token", "MOCK") {
+        _decimals = 18;
+    }
+
+    function decimals() public view virtual override returns (uint8) {
+        return _decimals;
+    }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -41,17 +49,33 @@ contract PrivateIntentPoolTest is Test {
         bytes32 indexed intentId,
         bytes32 indexed commitment,
         uint32 destChain,
+        address token,
         uint256 amount
     );
-    event IntentFilled(bytes32 indexed intentId, address indexed solver);
-    event IntentRefunded(bytes32 indexed intentId);
+    event IntentFilled(
+        bytes32 indexed intentId,
+        address indexed solver,
+        address indexed token,
+        uint256 amount
+    );
+    event IntentRefunded(bytes32 indexed intentId, uint256 amount);
     event RootSynced(uint32 indexed chainId, bytes32 root);
-    event TokenAdded(address indexed token);
+    event MerkleRootUpdated(bytes32 root);
+    event TokenAdded(
+        address indexed token,
+        uint256 minAmount,
+        uint256 maxAmount
+    );
     event TokenRemoved(address indexed token);
 
     function setUp() public {
         poseidon = new PoseidonHasher();
-        pool = new PrivateIntentPool(owner, relayer, feeCollector, address(poseidon));
+        pool = new PrivateIntentPool(
+            owner,
+            relayer,
+            feeCollector,
+            address(poseidon)
+        );
         token = new MockERC20();
 
         secret = keccak256("secret");
@@ -72,61 +96,78 @@ contract PrivateIntentPoolTest is Test {
 
         // Add token to whitelist
         vm.prank(owner);
-        pool.addSupportedToken(address(token));
+        pool.addSupportedToken(address(token), 0.01 ether, 100 ether, 18);
     }
 
     // ========== TOKEN WHITELIST TESTS ==========
 
     function test_AddSupportedToken() public {
         MockERC20 newToken = new MockERC20();
-        
+
         vm.expectEmit(true, false, false, false);
-        emit TokenAdded(address(newToken));
-        
+        emit TokenAdded(address(newToken), 0.01 ether, 100 ether);
+
         vm.prank(owner);
-        pool.addSupportedToken(address(newToken));
+        pool.addSupportedToken(
+            address(newToken),
+            0.01 ether, // minAmount
+            100 ether, // maxAmount
+            18 // decimals
+        );
 
         assertTrue(pool.isTokenSupported(address(newToken)));
-        
+
         address[] memory list = pool.getSupportedTokens();
         assertEq(list.length, 2);
         assertEq(list[1], address(newToken));
-        
+
         assertEq(pool.getSupportedTokenCount(), 2);
+
+        PrivateIntentPool.TokenConfig memory config = pool.getTokenConfig(
+            address(newToken)
+        );
+        assertEq(config.minFillAmount, 0.01 ether);
+        assertEq(config.maxFillAmount, 100 ether);
+        assertEq(config.decimals, 18);
     }
 
     function test_RevertWhen_AddSupportedToken_NotOwner() public {
         MockERC20 newToken = new MockERC20();
-        
+
         vm.prank(user);
         vm.expectRevert();
-        pool.addSupportedToken(address(newToken));
+        pool.addSupportedToken(
+            address(newToken),
+            0.01 ether, // minAmount
+            100 ether, // maxAmount
+            18 // decimals
+        );
     }
 
     function test_RevertWhen_AddSupportedToken_AlreadySupported() public {
         vm.prank(owner);
         vm.expectRevert(PrivateIntentPool.AlreadySupported.selector);
-        pool.addSupportedToken(address(token));
+        pool.addSupportedToken(address(token), 0.01 ether, 100 ether, 18);
     }
 
     function test_RevertWhen_AddSupportedToken_ZeroAddress() public {
         vm.prank(owner);
         vm.expectRevert(PrivateIntentPool.InvalidToken.selector);
-        pool.addSupportedToken(address(0));
+        pool.addSupportedToken(address(0), 0.01 ether, 100 ether, 18);
     }
 
     function test_RemoveSupportedToken() public {
         vm.expectEmit(true, false, false, false);
         emit TokenRemoved(address(token));
-        
+
         vm.prank(owner);
         pool.removeSupportedToken(address(token));
 
         assertFalse(pool.isTokenSupported(address(token)));
-        
+
         address[] memory list = pool.getSupportedTokens();
         assertEq(list.length, 0);
-        
+
         assertEq(pool.getSupportedTokenCount(), 0);
     }
 
@@ -138,7 +179,7 @@ contract PrivateIntentPoolTest is Test {
 
     function test_RevertWhen_RemoveSupportedToken_NotSupported() public {
         address notSupported = address(0xBEEF);
-        
+
         vm.prank(owner);
         vm.expectRevert(PrivateIntentPool.TokenNotSupported.selector);
         pool.removeSupportedToken(notSupported);
@@ -148,7 +189,7 @@ contract PrivateIntentPoolTest is Test {
         MockERC20 tokenB = new MockERC20();
 
         vm.startPrank(owner);
-        pool.addSupportedToken(address(tokenB));
+        pool.addSupportedToken(address(tokenB), 0.01 ether, 100 ether, 18);
         vm.stopPrank();
 
         vm.prank(owner);
@@ -165,10 +206,37 @@ contract PrivateIntentPoolTest is Test {
     function test_SupportedTokenQueries() public view {
         assertTrue(pool.isTokenSupported(address(token)));
         assertEq(pool.getSupportedTokenCount(), 1);
-        
+
         address[] memory tokens = pool.getSupportedTokens();
         assertEq(tokens.length, 1);
         assertEq(tokens[0], address(token));
+    }
+
+    function test_TokenConfig_ValidatesBounds() public {
+        PrivateIntentPool.TokenConfig memory config = pool.getTokenConfig(
+            address(token)
+        );
+
+        assertEq(config.minFillAmount, 0.01 ether);
+        assertEq(config.maxFillAmount, 100 ether);
+        assertEq(config.decimals, 18);
+        assertTrue(config.supported);
+    }
+
+    // 17. ADD: New test for updateTokenConfig
+    function test_UpdateTokenConfig() public {
+        vm.prank(owner);
+        pool.updateTokenConfig(
+            address(token),
+            0.1 ether, // new minAmount
+            50 ether // new maxAmount
+        );
+
+        PrivateIntentPool.TokenConfig memory config = pool.getTokenConfig(
+            address(token)
+        );
+        assertEq(config.minFillAmount, 0.1 ether);
+        assertEq(config.maxFillAmount, 50 ether);
     }
 
     // ========== INTENT CREATION TESTS ==========
@@ -177,7 +245,10 @@ contract PrivateIntentPoolTest is Test {
         vm.startPrank(relayer);
 
         vm.expectEmit(true, true, false, true);
-        emit IntentCreated(intentId, commitment, DEST_CHAIN, TEST_AMOUNT);
+        emit IntentCreated(intentId, commitment, DEST_CHAIN, address(token), TEST_AMOUNT);
+
+        vm.expectEmit(false, false, false, true);
+        emit MerkleRootUpdated(commitment);
 
         pool.createIntent(
             intentId,
@@ -185,7 +256,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         vm.stopPrank();
@@ -207,7 +279,7 @@ contract PrivateIntentPoolTest is Test {
     function test_RevertWhen_CreateIntent_TokenNotSupported() public {
         MockERC20 unsupportedToken = new MockERC20();
         unsupportedToken.mint(relayer, 1000 ether);
-        
+
         vm.prank(relayer);
         unsupportedToken.approve(address(pool), type(uint256).max);
 
@@ -219,14 +291,15 @@ contract PrivateIntentPoolTest is Test {
             address(unsupportedToken),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
     }
 
     function test_RevertWhen_CreateIntent_AmountTooSmall() public {
         vm.startPrank(relayer);
 
-        uint256 smallAmount = 0.0001 ether;
+        uint256 smallAmount = 0.005 ether;
 
         vm.expectRevert(PrivateIntentPool.InvalidAmount.selector);
         pool.createIntent(
@@ -235,7 +308,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             smallAmount,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         vm.stopPrank();
@@ -253,7 +327,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             largeAmount,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         vm.stopPrank();
@@ -268,7 +343,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         bytes32 intentId2 = keccak256("intent2");
@@ -279,7 +355,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         vm.stopPrank();
@@ -294,7 +371,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         bytes32 secret2 = keccak256("secret2");
@@ -314,7 +392,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         vm.stopPrank();
@@ -330,7 +409,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         bytes32 destRoot = intentId;
@@ -341,7 +421,7 @@ contract PrivateIntentPoolTest is Test {
 
         vm.startPrank(solver);
         vm.expectEmit(true, true, false, false);
-        emit IntentFilled(intentId, solver);
+        emit IntentFilled(intentId, solver, address(token), TEST_AMOUNT);
 
         pool.markFilled(intentId, proof, 0);
         vm.stopPrank();
@@ -365,7 +445,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         bytes32[] memory proof = new bytes32[](0);
@@ -392,7 +473,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         bytes32 destRoot = intentId;
@@ -418,7 +500,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         bytes32 destRoot = keccak256("destRoot");
@@ -429,7 +512,7 @@ contract PrivateIntentPoolTest is Test {
         invalidProof[0] = keccak256("invalid");
 
         vm.prank(solver);
-        vm.expectRevert(PrivateIntentPool.InvalidCommitment.selector);
+        vm.expectRevert(PrivateIntentPool.InvalidProof.selector);
         pool.markFilled(intentId, invalidProof, 0);
     }
 
@@ -441,7 +524,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         bytes32 destRoot = intentId;
@@ -472,13 +556,14 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
-        vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
+        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
 
         vm.expectEmit(true, false, false, false);
-        emit IntentRefunded(intentId);
+        emit IntentRefunded(intentId, TEST_AMOUNT);
 
         pool.refund(intentId);
 
@@ -496,7 +581,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         vm.expectRevert(PrivateIntentPool.IntentNotExpired.selector);
@@ -511,7 +597,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         bytes32 destRoot = intentId;
@@ -523,7 +610,7 @@ contract PrivateIntentPoolTest is Test {
         vm.prank(solver);
         pool.markFilled(intentId, proof, 0);
 
-        vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
+        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
 
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
         pool.refund(intentId);
@@ -537,10 +624,11 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
-        vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
+        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
         pool.refund(intentId);
 
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
@@ -606,7 +694,8 @@ contract PrivateIntentPoolTest is Test {
                 address(token),
                 TEST_AMOUNT,
                 DEST_CHAIN,
-                user
+                user,
+                0
             );
 
             assertTrue(pool.isCommitmentUsed(c));
@@ -620,7 +709,7 @@ contract PrivateIntentPoolTest is Test {
     // ========== FUZZ TESTS ==========
 
     function testFuzz_CreateIntent_ValidAmount(uint256 amount) public {
-        amount = bound(amount, pool.MIN_AMOUNT(), pool.MAX_AMOUNT());
+        amount = bound(amount, 0.01 ether, 100 ether);
 
         bytes32 s = keccak256(abi.encodePacked("fuzz_secret"));
         bytes32 n = keccak256(abi.encodePacked("fuzz_nullifier"));
@@ -637,14 +726,7 @@ contract PrivateIntentPoolTest is Test {
         token.mint(relayer, amount);
 
         vm.prank(relayer);
-        pool.createIntent(
-            id,
-            c,
-            address(token),
-            amount,
-            DEST_CHAIN,
-            user
-        );
+        pool.createIntent(id, c, address(token), amount, DEST_CHAIN, user, 0);
 
         PrivateIntentPool.Intent memory intent = pool.getIntent(id);
         assertEq(intent.amount, amount);
@@ -660,10 +742,13 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
-        vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + timeAfterDeadline);
+        vm.warp(
+            block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + timeAfterDeadline
+        );
 
         pool.refund(intentId);
 
@@ -683,7 +768,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
         uint256 gasUsed = gasBefore - gasleft();
 
@@ -699,7 +785,8 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
         bytes32 destRoot = intentId;
@@ -725,10 +812,11 @@ contract PrivateIntentPoolTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0 // customDeadline
         );
 
-        vm.warp(block.timestamp + pool.INTENT_TIMEOUT() + 1);
+        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
 
         uint256 gasBefore = gasleft();
         pool.refund(intentId);

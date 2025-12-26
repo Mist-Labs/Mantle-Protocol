@@ -13,15 +13,16 @@
   "instances": [
     {
       "abi": "IntentPool",
-      "address": "0x759b40396ac6ff7f1d1cBe095507b5f65229b05a",
+      "address": "0xEeE2406c7F8bBB6bFD28E6EAc1bB3eA23c4ed8DF",
       "chain": "sepolia",
       "startBlock": 9859983
     },
     {
       "abi": "Settlement",
-      "address": "0x86eEA33D59F1B5a806c41Cf7B040f507C8A6D7D7",
+      "address": "0x0d632dC7786CD01712ED3CF3c6fa7F9e9C67Fa49",
       "chain": "sepolia",
       "startBlock": 9859983
     }
   ]
 }
+

@@ -11,7 +11,15 @@ import {
 } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract MockERC20 is ERC20 {
-    constructor() ERC20("Mock Token", "MOCK") {}
+    uint8 private _decimals;
+
+    constructor() ERC20("Mock Token", "MOCK") {
+        _decimals = 18;
+    }
+
+    function decimals() public view virtual override returns (uint8) {
+        return _decimals;
+    }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -33,6 +41,8 @@ contract PrivateSettlementTest is Test {
     address public recipient = makeAddr("recipient");
     address public owner = makeAddr("owner");
 
+    uint256 public leafIndex = 0;
+
     uint256 public recipientPrivateKey = 0x1234;
     address public recipientAddr;
 
@@ -47,16 +57,23 @@ contract PrivateSettlementTest is Test {
     event IntentFilled(
         bytes32 indexed intentId,
         address indexed solver,
+        address indexed token,
         uint256 amount
     );
     event WithdrawalClaimed(
         bytes32 indexed intentId,
         bytes32 indexed nullifier,
-        address recipient
+        address indexed recipient,
+        address token,
+        uint256 amount
     );
     event RootSynced(uint32 indexed chainId, bytes32 root);
     event MerkleRootUpdated(bytes32 root);
-    event TokenAdded(address indexed token);
+    event TokenAdded(
+        address indexed token,
+        uint256 minAmount,
+        uint256 maxAmount
+    );
     event TokenRemoved(address indexed token);
 
     function setUp() public {
@@ -89,7 +106,7 @@ contract PrivateSettlementTest is Test {
 
         // Add token to whitelist
         vm.prank(owner);
-        settlement.addSupportedToken(address(token));
+        settlement.addSupportedToken(address(token), 0.01 ether, 100 ether, 18);
     }
 
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
@@ -197,11 +214,16 @@ contract PrivateSettlementTest is Test {
     function test_AddSupportedToken() public {
         MockERC20 newToken = new MockERC20();
 
-        vm.expectEmit(true, false, false, false);
-        emit TokenAdded(address(newToken));
+        vm.expectEmit(true, false, false, true);
+        emit TokenAdded(address(newToken), 0.01 ether, 100 ether);
 
         vm.prank(owner);
-        settlement.addSupportedToken(address(newToken));
+        settlement.addSupportedToken(
+            address(newToken),
+            0.01 ether,
+            100 ether,
+            18
+        );
 
         assertTrue(settlement.isTokenSupported(address(newToken)));
 
@@ -210,6 +232,14 @@ contract PrivateSettlementTest is Test {
         assertEq(list[1], address(newToken));
 
         assertEq(settlement.getSupportedTokenCount(), 2);
+
+        // Verify config
+        PrivateSettlement.TokenConfig memory config = settlement.getTokenConfig(
+            address(newToken)
+        );
+        assertEq(config.minFillAmount, 0.01 ether);
+        assertEq(config.maxFillAmount, 100 ether);
+        assertEq(config.decimals, 18);
     }
 
     function test_RevertWhen_AddSupportedToken_NotOwner() public {
@@ -217,19 +247,24 @@ contract PrivateSettlementTest is Test {
 
         vm.prank(solver);
         vm.expectRevert();
-        settlement.addSupportedToken(address(newToken));
+        settlement.addSupportedToken(
+            address(newToken),
+            0.01 ether,
+            100 ether,
+            18
+        );
     }
 
     function test_RevertWhen_AddSupportedToken_AlreadySupported() public {
         vm.prank(owner);
         vm.expectRevert(PrivateSettlement.AlreadySupported.selector);
-        settlement.addSupportedToken(address(token));
+        settlement.addSupportedToken(address(token), 0.01 ether, 100 ether, 18);
     }
 
     function test_RevertWhen_AddSupportedToken_ZeroAddress() public {
         vm.prank(owner);
         vm.expectRevert(PrivateSettlement.InvalidToken.selector);
-        settlement.addSupportedToken(address(0));
+        settlement.addSupportedToken(address(0), 0.01 ether, 100 ether, 18);
     }
 
     function test_RemoveSupportedToken() public {
@@ -265,7 +300,12 @@ contract PrivateSettlementTest is Test {
         MockERC20 tokenB = new MockERC20();
 
         vm.startPrank(owner);
-        settlement.addSupportedToken(address(tokenB));
+        settlement.addSupportedToken(
+            address(tokenB),
+            0.01 ether,
+            100 ether,
+            18
+        );
         vm.stopPrank();
 
         vm.prank(owner);
@@ -288,23 +328,35 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        vm.startPrank(solver);
-
-        vm.expectEmit(true, true, false, true);
-        emit IntentFilled(intentId, solver, TEST_AMOUNT);
-
-        settlement.fillIntent(
+        // Register intent first
+        vm.prank(relayer);
+        settlement.registerIntent(
             intentId,
             commitment,
-            SOURCE_CHAIN,
             address(token),
             TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
             sourceRoot,
             proof,
             0
         );
 
-        vm.stopPrank();
+    
+
+        vm.expectEmit(true, true, false, true);
+        emit IntentFilled(intentId, solver, address(token), TEST_AMOUNT);
+
+        vm.prank(solver);
+        settlement.fillIntent(
+            intentId,
+            commitment,
+            SOURCE_CHAIN,
+            address(token),
+            TEST_AMOUNT
+        );
+
+
 
         PrivateSettlement.Fill memory fill = settlement.getFill(intentId);
         assertEq(fill.solver, solver);
@@ -332,14 +384,15 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        vm.prank(solver);
+        vm.prank(relayer);
         vm.expectRevert(PrivateSettlement.TokenNotSupported.selector);
-        settlement.fillIntent(
+        settlement.registerIntent(
             intentId,
             commitment,
-            SOURCE_CHAIN,
             address(unsupportedToken),
             TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
             sourceRoot,
             proof,
             0
@@ -353,16 +406,26 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         vm.prank(solver);
@@ -372,10 +435,7 @@ contract PrivateSettlementTest is Test {
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
     }
 
@@ -387,20 +447,20 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory invalidProof = new bytes32[](1);
         invalidProof[0] = keccak256("invalid");
 
-        vm.prank(solver);
+        vm.prank(relayer);
         vm.expectRevert(PrivateSettlement.InvalidProof.selector);
-        settlement.fillIntent(
+        settlement.registerIntent(
             intentId,
             commitment,
-            SOURCE_CHAIN,
             address(token),
             TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
             sourceRoot,
             invalidProof,
             0
         );
     }
-
     function test_FillIntent_MultipleSolvers() public {
         address solver2 = makeAddr("solver2");
         token.mint(solver2, 1000 ether);
@@ -427,31 +487,53 @@ contract PrivateSettlementTest is Test {
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
         bytes32[] memory proof0 = getMerkleProof(leaves, 0);
+
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof0,
+            0
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof0,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 intentId2 = keccak256("intent2");
 
         bytes32[] memory proof1 = getMerkleProof(leaves, 1);
+
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId2,
+            commitment2,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof1,
+            1
+        );
+
         vm.prank(solver2);
         settlement.fillIntent(
             intentId2,
             commitment2,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof1,
-            1
+            TEST_AMOUNT
         );
 
         assertEq(settlement.getFillTreeSize(), 2);
@@ -466,16 +548,26 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 authHash = keccak256(
@@ -492,8 +584,14 @@ contract PrivateSettlementTest is Test {
 
         vm.startPrank(relayer);
 
-        vm.expectEmit(true, true, false, true);
-        emit WithdrawalClaimed(intentId, nullifier, recipientAddr);
+        vm.expectEmit(true, true, true, true);
+        emit WithdrawalClaimed(
+            intentId,
+            nullifier,
+            recipientAddr,
+            address(token),
+            TEST_AMOUNT - ((TEST_AMOUNT * settlement.FEE_BPS()) / 10000)
+        );
 
         settlement.claimWithdrawal(
             intentId,
@@ -522,16 +620,26 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        vm.prank(solver);
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            leafIndex
+        );
+
+        vm.prank(solver); // THEN call fillIntent with ONLY these parameters:
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         vm.prank(solver);
@@ -576,16 +684,26 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        vm.prank(solver);
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            leafIndex
+        );
+
+        vm.prank(solver); // THEN call fillIntent with ONLY these parameters:
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 authHash = keccak256(
@@ -627,16 +745,26 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0 // Fixed: leafIndex = 0 for single-leaf tree
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 authHash = keccak256(
@@ -660,12 +788,13 @@ contract PrivateSettlementTest is Test {
             claimAuth
         );
 
+        // Now try to reuse the same nullifier with a different intent
         bytes32 intentId2 = keccak256("intent2");
         bytes32 secret2 = keccak256("secret2");
 
         bytes32[4] memory inputs2 = [
             secret2,
-            nullifier,
+            nullifier, // Same nullifier - this should fail!
             bytes32(TEST_AMOUNT),
             bytes32(uint256(SOURCE_CHAIN))
         ];
@@ -680,16 +809,28 @@ contract PrivateSettlementTest is Test {
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot2);
 
         bytes32[] memory proof2 = getMerkleProof(leaves, 1);
+
+        // Fixed: Add registerIntent before fillIntent
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId2,
+            commitment2,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot2,
+            proof2,
+            1 // Fixed: leafIndex = 1 for second leaf in 2-leaf tree
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId2,
             commitment2,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot2,
-            proof2,
-            1
+            TEST_AMOUNT
         );
 
         bytes32 authHash2 = keccak256(
@@ -712,6 +853,7 @@ contract PrivateSettlementTest is Test {
         );
     }
 
+    // test_RevertWhen_ClaimWithdrawal_InvalidCommitment
     function test_RevertWhen_ClaimWithdrawal_InvalidCommitment() public {
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
@@ -719,16 +861,28 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
+        // ADD: Register intent first
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
+        // FIXED: Correct fillIntent signature
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 authHash = keccak256(
@@ -756,6 +910,7 @@ contract PrivateSettlementTest is Test {
         );
     }
 
+    // test_RevertWhen_ClaimWithdrawal_InvalidSignature
     function test_RevertWhen_ClaimWithdrawal_InvalidSignature() public {
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
@@ -763,16 +918,28 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
+        // ADD: Register intent first
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
+        // FIXED: Correct fillIntent signature
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         uint256 wrongPrivateKey = 0x5678;
@@ -824,6 +991,7 @@ contract PrivateSettlementTest is Test {
 
     // ========== MERKLE TREE TESTS ==========
 
+    // test_GenerateFillProof_SingleFill
     function test_GenerateFillProof_SingleFill() public {
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
@@ -831,16 +999,28 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
+        // ADD: Register intent first
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
+        // FIXED: Correct fillIntent signature
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32[] memory fillProof = settlement.generateFillProof(intentId);
@@ -848,22 +1028,35 @@ contract PrivateSettlementTest is Test {
         assertEq(settlement.getMerkleRoot(), intentId);
     }
 
+    // test_GenerateFillProof_MultipleFills
     function test_GenerateFillProof_MultipleFills() public {
         bytes32 sourceRoot1 = commitment;
         bytes32[] memory proof0 = new bytes32[](0);
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot1);
 
+        // ADD: Register first intent
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot1,
+            proof0,
+            0
+        );
+
+        // FIXED: Correct fillIntent signature
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot1,
-            proof0,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 intentId2 = keccak256("intent2");
@@ -882,16 +1075,28 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(2, sourceRoot2);
 
+        // ADD: Register second intent
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId2,
+            commitment2,
+            address(token),
+            TEST_AMOUNT,
+            2,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot2,
+            proof1,
+            0
+        );
+
+        // FIXED: Correct fillIntent signature
         vm.prank(solver);
         settlement.fillIntent(
             intentId2,
             commitment2,
             2,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot2,
-            proof1,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 expectedRoot = _hashPair(intentId, intentId2);
@@ -906,8 +1111,8 @@ contract PrivateSettlementTest is Test {
         assertEq(fillProof2[0], intentId);
     }
 
+    // test_MerkleRootUpdates - Fix all three fillIntent calls
     function test_MerkleRootUpdates() public {
-        // Single-leaf source root syncing and empty proof
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
 
@@ -915,25 +1120,35 @@ contract PrivateSettlementTest is Test {
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
         bytes32 root1 = settlement.getMerkleRoot();
-        assertEq(root1, bytes32(0)); // Empty initially
+        assertEq(root1, bytes32(0));
 
-        // Add first fill
+        // ADD: Register first intent
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
+        // FIXED: Correct fillIntent signature
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 root2 = settlement.getMerkleRoot();
         assertEq(root2, intentId);
 
-        // Add second fill (for 2-leaf tree)
         bytes32 intentId2 = keccak256("intent2_root_test");
         bytes32 secret2 = keccak256("secret2_root_test");
         bytes32 nullifier2 = keccak256("nullifier2_root_test");
@@ -949,16 +1164,28 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(2, sourceRoot2);
 
+        // ADD: Register second intent
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId2,
+            commitment2,
+            address(token),
+            TEST_AMOUNT,
+            2,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot2,
+            proof,
+            0
+        );
+
+        // FIXED: Correct fillIntent signature
         vm.prank(solver);
         settlement.fillIntent(
             intentId2,
             commitment2,
             2,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot2,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 expectedRoot3 = _hashPair(intentId, intentId2);
@@ -968,8 +1195,8 @@ contract PrivateSettlementTest is Test {
 
     // ========== INTEGRATION TESTS ==========
 
+    // test_FullFlowWithMultipleFills - Fix the fillIntent calls
     function test_FullFlowWithMultipleFills() public {
-        // Build 3 commitments on the source chain, then compute root and proofs
         uint256 COUNT = 3;
         bytes32[] memory leaves = new bytes32[](COUNT);
         bytes32[] memory secrets = new bytes32[](COUNT);
@@ -1002,23 +1229,33 @@ contract PrivateSettlementTest is Test {
         for (uint256 i = 0; i < COUNT; i++) {
             bytes32[] memory p = getMerkleProof(leaves, i);
 
+            // ADD: Register intent first
+            vm.prank(relayer);
+            settlement.registerIntent(
+                ids[i],
+                leaves[i],
+                address(token),
+                TEST_AMOUNT,
+                SOURCE_CHAIN,
+                uint64(block.timestamp + 1 hours),
+                sourceRoot,
+                p,
+                i
+            );
+
             vm.prank(solver);
             settlement.fillIntent(
                 ids[i],
                 leaves[i],
                 SOURCE_CHAIN,
                 address(token),
-                TEST_AMOUNT,
-                sourceRoot,
-                p,
-                i
+                TEST_AMOUNT
             );
         }
 
         assertEq(settlement.getFillTreeSize(), COUNT);
         assertEq(token.balanceOf(address(settlement)), TEST_AMOUNT * COUNT);
 
-        // Claim the middle intent (index 1)
         bytes32 targetIntent = ids[1];
         bytes32 targetNullifier = nulls[1];
         bytes32 targetSecret = secrets[1];
@@ -1044,15 +1281,14 @@ contract PrivateSettlementTest is Test {
             claimAuth
         );
 
-        // Verify claimed status
         assertTrue(settlement.getFill(targetIntent).claimed);
         assertTrue(settlement.isNullifierUsed(targetNullifier));
     }
-
     // ========== FUZZ TESTS ==========
 
+    // testFuzz_FillIntent_ValidAmount
     function testFuzz_FillIntent_ValidAmount(uint256 amount) public {
-        amount = bound(amount, 0.001 ether, 100 ether);
+        amount = bound(amount, 0.01 ether, 100 ether);
 
         bytes32 s = keccak256("fuzz_secret");
         bytes32 n = keccak256("fuzz_nullifier");
@@ -1066,7 +1302,6 @@ contract PrivateSettlementTest is Test {
         ];
         bytes32 c = poseidon.poseidon(inputs);
 
-        // Single-leaf on source chain
         bytes32 sourceRoot = c;
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
@@ -1075,17 +1310,23 @@ contract PrivateSettlementTest is Test {
 
         token.mint(solver, amount);
 
-        vm.prank(solver);
-        settlement.fillIntent(
+   
+        vm.prank(relayer);
+        settlement.registerIntent(
             id,
             c,
-            SOURCE_CHAIN,
             address(token),
             amount,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
             sourceRoot,
             proof,
             0
         );
+
+  
+        vm.prank(solver);
+        settlement.fillIntent(id, c, SOURCE_CHAIN, address(token), amount);
 
         PrivateSettlement.Fill memory fill = settlement.getFill(id);
         assertEq(fill.amount, amount);
@@ -1094,6 +1335,7 @@ contract PrivateSettlementTest is Test {
 
     // ========== GAS BENCHMARKS ==========
 
+    // test_Gas_FillIntent
     function test_Gas_FillIntent() public {
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
@@ -1101,24 +1343,35 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        vm.startPrank(solver);
+        // ADD: Register intent first
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
+        vm.prank(solver);
         uint256 gasBefore = gasleft();
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
         uint256 gasUsed = gasBefore - gasleft();
 
         console.log("Gas used for fillIntent (1-leaf Merkle):", gasUsed);
-        vm.stopPrank();
     }
 
+    // test_Gas_ClaimWithdrawal
     function test_Gas_ClaimWithdrawal() public {
         bytes32 sourceRoot = commitment;
         bytes32[] memory proof = new bytes32[](0);
@@ -1126,16 +1379,26 @@ contract PrivateSettlementTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         bytes32 authHash = keccak256(

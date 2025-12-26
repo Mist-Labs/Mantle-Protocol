@@ -356,6 +356,46 @@ impl Database {
         Ok(results.into_iter().map(db_intent_to_model).collect())
     }
 
+    pub fn store_intent_privacy_params(
+        &self,
+        intent_id: &str,
+        commitment: &str,
+        secret: &str,
+        nullifier: &str,
+        claim_auth: &str,
+        recipient: &str,
+    ) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        let new_params = NewIntentPrivacyParams {
+            intent_id,
+            commitment: Some(commitment),
+            secret: Some(secret),
+            nullifier: Some(nullifier),
+            claim_signature: Some(claim_auth),
+            recipient: Some(recipient),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        diesel::insert_into(intent_privacy_params::table)
+            .values(&new_params)
+            .on_conflict(intent_privacy_params::intent_id)
+            .do_update()
+            .set((
+                intent_privacy_params::commitment.eq(Some(commitment)),
+                intent_privacy_params::secret.eq(Some(secret)),
+                intent_privacy_params::nullifier.eq(Some(nullifier)),
+                intent_privacy_params::claim_signature.eq(Some(claim_auth)),
+                intent_privacy_params::recipient.eq(Some(recipient)),
+                intent_privacy_params::updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to store/update privacy params")?;
+
+        Ok(())
+    }
+
     pub fn update_privacy_params(
         &self,
         intent_id: &str,
