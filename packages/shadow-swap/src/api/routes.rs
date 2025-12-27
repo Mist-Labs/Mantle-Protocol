@@ -554,6 +554,6 @@ pub async fn root() -> impl Responder {
         "version": "1.0.0",
         "status": "operational",
         "supported_chains": ["ethereum", "mantle"],
-        "supported_tokens": ["ETH", "USDC", "USDT", "WETH", "DAI", "MNT"]
+        "supported_tokens": ["ETH", "USDC", "USDT", "WETH", "MNT"]
     }))
 }

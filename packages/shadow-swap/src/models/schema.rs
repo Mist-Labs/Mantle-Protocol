@@ -64,6 +64,8 @@ diesel::table! {
         id -> Text,
         source_token -> Text,
         amount -> Text,
+        #[max_length = 50]
+        dest_chain -> Varchar,
         deadline -> Int8,
         source_commitment -> Nullable<Text>,
         dest_fill_txid -> Nullable<Text>,
@@ -74,8 +76,6 @@ diesel::table! {
         user_address -> Varchar,
         #[max_length = 50]
         source_chain -> Varchar,
-        #[max_length = 50]
-        dest_chain -> Varchar,
         #[max_length = 42]
         dest_token -> Varchar,
         #[max_length = 78]
