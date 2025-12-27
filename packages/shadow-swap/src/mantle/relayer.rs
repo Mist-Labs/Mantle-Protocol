@@ -8,7 +8,7 @@ use ethers::{
     signers::{LocalWallet, Signer},
     types::{Address, Bytes, U256},
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     database::database::Database,
@@ -617,6 +617,8 @@ impl MantleRelayer {
     pub async fn sync_source_root_tx(&self, chain_id: u32, root: String) -> Result<String> {
         info!("🌳 Syncing source chain {} root on Mantle", chain_id);
 
+        self.check_balance().await?;
+
         let root_bytes: [u8; 32] = hex::decode(&root[2..])
             .map_err(|e| anyhow!("Invalid root hex: {}", e))?
             .try_into()
@@ -643,8 +645,31 @@ impl MantleRelayer {
         Ok(tx_hash)
     }
 
+    pub async fn check_balance(&self) -> Result<U256> {
+        let signer = self.client.signer();
+        let address = signer.address();
+
+        let balance = self.client.get_balance(address, None).await?;
+
+        info!(
+            "💰 Mantle Relayer balance: {} MNT",
+            ethers::utils::format_ether(balance)
+        );
+
+        if balance < ethers::utils::parse_ether("0.5")? {
+            warn!(
+                "⚠️  Low MNT balance! Please fund relayer account: {:?}",
+                address
+            );
+        }
+
+        Ok(balance)
+    }
+
     pub async fn sync_dest_root_tx(&self, chain_id: u32, root: [u8; 32]) -> Result<String> {
         info!("🌳 Syncing dest chain {} root on Mantle", chain_id);
+
+        self.check_balance().await?;
 
         let tx = self.intent_pool.sync_dest_chain_root(chain_id, root);
 

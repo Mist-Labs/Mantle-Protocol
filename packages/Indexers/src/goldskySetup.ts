@@ -94,7 +94,7 @@ async function setupPipelines() {
       },
       {
         address: process.env.MANTLE_SETTLEMENT_ADDRESS!,
-        events: ["WithdrawalClaimed", "RootSynced"],
+        events: ["WithdrawalClaimed", "IntentRegistered", "RootSynced"],
         startBlock: "latest",
       },
     ],
@@ -114,7 +114,7 @@ async function setupPipelines() {
       },
       {
         address: process.env.ETHEREUM_SETTLEMENT_ADDRESS!,
-        events: ["WithdrawalClaimed", "RootSynced"],
+        events: ["WithdrawalClaimed", "IntentRegistered", "RootSynced"],
         startBlock: "latest",
       },
     ],

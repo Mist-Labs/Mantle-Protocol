@@ -91,6 +91,7 @@ pub struct IntentPrivacyParams {
 pub enum IntentStatus {
     Created,
     Committed,
+    Registered,
     Pending,
     Filled,
     Completed,

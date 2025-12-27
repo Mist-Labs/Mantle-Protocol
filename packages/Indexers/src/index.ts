@@ -5,6 +5,7 @@ import { eventQueue, initQueue } from "./queue";
 
 const SUPPORTED_EVENTS = [
   "intent_created",
+  "intent_registered",
   "intent_filled",
   "intent_refunded",
   "withdrawal_claimed",
