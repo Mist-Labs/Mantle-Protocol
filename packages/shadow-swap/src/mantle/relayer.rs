@@ -669,6 +669,8 @@ impl MantleRelayer {
     pub async fn sync_dest_root_tx(&self, chain_id: u32, root: [u8; 32]) -> Result<String> {
         info!("🌳 Syncing dest chain {} root on Mantle", chain_id);
 
+        self.check_balance().await?;
+
         let tx = self.intent_pool.sync_dest_chain_root(chain_id, root);
 
         let pending = tx

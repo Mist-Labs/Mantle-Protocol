@@ -625,6 +625,8 @@ impl EthereumRelayer {
     pub async fn sync_source_root_tx(&self, chain_id: u32, root: String) -> Result<String> {
         info!("🌳 Syncing source chain {} root on Ethereum", chain_id);
 
+        self.check_balance().await?;
+
         let root_bytes: [u8; 32] = hex::decode(&root[2..])
             .map_err(|e| anyhow!("Invalid root hex: {}", e))?
             .try_into()
