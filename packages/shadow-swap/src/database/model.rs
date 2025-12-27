@@ -7,10 +7,13 @@ use serde::{Deserialize, Serialize};
 use crate::models::{
     model::{Intent, IntentPrivacyParams, IntentStatus},
     schema::{
-        bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints, intent_privacy_params, intents, mantle_sepolia_intent_created, merkle_nodes, merkle_roots, merkle_tree_ethereum_commitments, merkle_trees
+        bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
+        intent_privacy_params, intents, mantle_sepolia_intent_created, merkle_nodes, merkle_roots,
+        merkle_tree_ethereum_commitments, merkle_trees,
     },
 };
 
+// ==================== Intents ====================
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = intents)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -55,6 +58,7 @@ pub struct NewIntent<'a> {
     pub deadline: i64,
     pub refund_address: Option<&'a str>,
 }
+
 // ==================== Intent Privacy Params ====================
 
 #[derive(Debug, Clone, Queryable, Selectable)]
@@ -227,6 +231,7 @@ pub struct DbMerkleRoot {
     pub root: String,
     pub leaf_count: i64,
     pub updated_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Insertable, Debug)]
@@ -236,6 +241,7 @@ pub struct NewMerkleRoot<'a> {
     pub root: &'a str,
     pub leaf_count: i64,
     pub updated_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Queryable, Selectable)]

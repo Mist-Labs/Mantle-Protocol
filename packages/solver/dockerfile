@@ -1,0 +1,52 @@
+# ============================================
+# Stage 1: Build
+# ============================================
+FROM rust:slim-bookworm AS builder
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy workspace files (from monorepo root)
+COPY Cargo.toml Cargo.lock ./
+COPY packages/shadow-swap ./packages/shadow-swap
+COPY packages/solver ./packages/solver
+
+# Build solver
+WORKDIR /build
+RUN cargo build --release -p solver
+
+# ============================================
+# Stage 2: Runtime
+# ============================================
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1001 appuser
+
+# Copy binary
+COPY --from=builder /build/target/release/solver /usr/local/bin/solver
+
+# Set ownership
+RUN chown appuser:appuser /usr/local/bin/solver
+
+USER appuser
+
+# Solver doesn't need to expose ports unless it has an API
+# EXPOSE 8081
+
+ENV RUST_LOG=info
+
+CMD ["solver"]

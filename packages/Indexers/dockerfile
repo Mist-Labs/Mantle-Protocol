@@ -1,0 +1,54 @@
+# ============================================
+# Stage 1: Build
+# ============================================
+FROM node:slim AS builder
+
+WORKDIR /build
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build TypeScript (if applicable)
+RUN npm run build
+
+# ============================================
+# Stage 2: Runtime
+# ============================================
+FROM node:20-slim
+
+# Install dumb-init for proper signal handling
+RUN apt-get update && apt-get install -y --no-install-recommends dumb-init && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1001 appuser
+
+WORKDIR /app
+
+# Copy dependencies from builder
+COPY --from=builder /build/node_modules ./node_modules
+COPY --from=builder /build/package*.json ./
+
+# Copy built files
+COPY --from=builder /build/dist ./dist
+
+# If no build step, copy source instead:
+# COPY --from=builder /build/src ./src
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+ENV NODE_ENV=production
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+
+# Adjust based on your package.json start script
+CMD ["node", "src/index.js"]

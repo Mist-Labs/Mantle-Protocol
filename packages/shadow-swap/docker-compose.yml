@@ -1,0 +1,36 @@
+# docker-compose.yml
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: evans
+      POSTGRES_PASSWORD: 2242
+      POSTGRES_DB: shadow-swap-EVM
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evans"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  shadow-swap:
+    image: shadow-swap:test
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - RUST_LOG=debug
+      # Override DATABASE_URL to use docker network
+      - DATABASE_URL=postgresql://neondb_owner:npg_BV9UcyuSt4hI@ep-shiny-wildflower-adh6jpfl-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
