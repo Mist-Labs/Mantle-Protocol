@@ -17,6 +17,22 @@ export async function handleIntentCreated(payload: GoldskyWebhookPayload): Promi
   };
 }
 
+export async function handleIntentRegistered(payload: GoldskyWebhookPayload): Promise<RelayerEventPayload> {
+  const { event, block, chainId } = payload;
+  
+  return {
+    event_type: EventType.IntentRegistered,
+    chain: getChainName(chainId),
+    chain_id: chainId,
+    transaction_hash: event.transactionHash,
+    block_number: block.number,
+    log_index: event.logIndex,
+    contract_address: event.address.toLowerCase(),
+    event_data: formatEventData(event.args),
+    timestamp: block.timestamp
+  };
+}
+
 export async function handleIntentFilled(payload: GoldskyWebhookPayload): Promise<RelayerEventPayload> {
   const { event, block, chainId } = payload;
   const contractType = getContractType(chainId, event.address);

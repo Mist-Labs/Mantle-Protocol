@@ -3,6 +3,7 @@ import { config } from './config';
 import { GoldskyWebhookPayload, RelayerEventPayload } from './types';
 import { 
   handleIntentCreated, 
+  handleIntentRegistered,
   handleIntentFilled, 
   handleIntentRefunded, 
   handleWithdrawalClaimed, 
@@ -39,19 +40,22 @@ export async function initQueue() {
     let relayerPayload: RelayerEventPayload;
     
     switch (payload.event.name) {
-      case 'intent_created':
+      case 'IntentCreated':
         relayerPayload = await handleIntentCreated(payload);
         break;
-      case 'intent_filled':
+      case 'IntentRegistered':
+        relayerPayload = await handleIntentRegistered(payload);
+        break;
+      case 'IntentFilled':
         relayerPayload = await handleIntentFilled(payload);
         break;
-      case 'intent_refunded':
+      case 'IntentRefunded':
         relayerPayload = await handleIntentRefunded(payload);
         break;
-      case 'withdrawal_claimed':
+      case 'WithdrawalClaimed':
         relayerPayload = await handleWithdrawalClaimed(payload);
         break;
-      case 'root_synced':
+      case 'RootSynced':
         relayerPayload = await handleRootSynced(payload);
         break;
       default:

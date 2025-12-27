@@ -294,6 +294,7 @@ impl IntentStatus {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Created => "created",
+            Self::Registered => "registered",
             Self::Pending => "pending",
             Self::Committed => "committed",
             Self::Filled => "filled",

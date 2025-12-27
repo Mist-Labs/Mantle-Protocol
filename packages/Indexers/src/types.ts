@@ -39,6 +39,7 @@ export interface EventHandler {
 
 export enum EventType {
   IntentCreated = 'intent_created',
+  IntentRegistered = 'intent_registered',
   IntentFilled = 'intent_filled',
   IntentRefunded = 'intent_refunded',
   WithdrawalClaimed = 'withdrawal_claimed',

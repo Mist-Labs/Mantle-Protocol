@@ -3,16 +3,14 @@ use std::collections::HashMap;
 use actix_web::{HttpRequest, HttpResponse, Responder, get, post, web};
 use chrono::Utc;
 use serde_json::json;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
     AppState,
     api::{
         helper::{
-            handle_intent_completed_event, handle_intent_created_event, handle_intent_filled_event,
-            handle_intent_refunded_event, handle_root_synced_event,
-            handle_withdrawal_claimed_event, validate_hmac,
+            handle_intent_created_event, handle_intent_filled_event, handle_intent_refunded_event, handle_intent_registered_event, handle_root_synced_event, handle_withdrawal_claimed_event, validate_hmac
         },
         model::{
             AllPricesResponse, ConvertRequest, ConvertResponse, IndexerEventRequest,
@@ -296,6 +294,10 @@ pub async fn indexer_event(
     body: web::Bytes,
 ) -> impl Responder {
     // HMAC validation for security
+    if let Ok(body_str) = std::str::from_utf8(&body) {
+        debug!("📥 Received indexer event body: {}", body_str);
+    }
+
     if let Err(response) = validate_hmac(&req, &body, &app_state) {
         return response;
     }
@@ -319,7 +321,7 @@ pub async fn indexer_event(
     match request.event_type.as_str() {
         "intent_created" => handle_intent_created_event(&app_state, &request).await,
         "intent_filled" => handle_intent_filled_event(&app_state, &request).await,
-        "intent_completed" => handle_intent_completed_event(&app_state, &request).await,
+        "intent_registered" => handle_intent_registered_event(&app_state, &request).await,
         "intent_refunded" => handle_intent_refunded_event(&app_state, &request).await,
         "withdrawal_claimed" => handle_withdrawal_claimed_event(&app_state, &request).await,
         "root_synced" => handle_root_synced_event(&app_state, &request).await,
