@@ -1,9 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { useAccount, useBalance, useChainId, useSwitchChain } from "wagmi"
 import { parseEther, formatEther } from "viem"
+import type { Address } from "viem"
 import { toast } from "sonner"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -11,15 +12,16 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ArrowDownUp, ArrowRight, Shield, Clock, DollarSign, AlertCircle, CheckCircle2 } from "lucide-react"
+import { ArrowDownUp, ArrowRight, Shield, Clock, DollarSign, AlertCircle, CheckCircle2, Loader2 } from "lucide-react"
 import BridgeProgress from "./BridgeProgress"
+import { useBridge } from "@/hooks/useBridge"
+import { SUPPORTED_TOKENS } from "@/lib/tokens"
+import { useTokenUSDValue, useTokenConversion } from "@/hooks/usePriceFeed"
 
-// Supported networks
+// Supported networks (testnets only for MVP)
 const NETWORKS = [
-  { id: 5000, name: "Mantle Mainnet", symbol: "MNT", logo: "M" },
-  { id: 5003, name: "Mantle Sepolia", symbol: "MNT", logo: "M" },
-  { id: 1, name: "Ethereum Mainnet", symbol: "ETH", logo: "Ξ" },
-  { id: 11155111, name: "Ethereum Sepolia", symbol: "ETH", logo: "Ξ" },
+  { id: 5003, name: "Mantle Sepolia", symbol: "MNT", logo: "M", chain: "mantle" as const },
+  { id: 11155111, name: "Ethereum Sepolia", symbol: "ETH", logo: "Ξ", chain: "ethereum" as const },
 ]
 
 export default function BridgeForm() {
@@ -27,14 +29,43 @@ export default function BridgeForm() {
   const chainId = useChainId()
   const { switchChain } = useSwitchChain()
 
+  // Bridge hook
+  const { bridge, reset, state, isLoading, step, intentId, txHash, status, error } = useBridge()
+
   // Form state
   const [fromNetwork, setFromNetwork] = useState(NETWORKS[0])
   const [toNetwork, setToNetwork] = useState(NETWORKS[1])
+  const [selectedToken, setSelectedToken] = useState<string>("ETH")
   const [amount, setAmount] = useState("")
   const [destinationAddress, setDestinationAddress] = useState("")
   const [useConnectedWallet, setUseConnectedWallet] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [showProgress, setShowProgress] = useState(false)
+
+  // Price feed hooks
+  const { usdValue, isLoading: isLoadingUSD, price } = useTokenUSDValue(selectedToken, amount)
+  const {
+    outputAmount,
+    rate,
+    isLoading: isLoadingConversion,
+  } = useTokenConversion(selectedToken, selectedToken, amount)
+
+  // Show progress modal when bridge starts
+  useEffect(() => {
+    if (isLoading && !showProgress) {
+      setShowProgress(true)
+    }
+  }, [isLoading, showProgress])
+
+  // Close progress modal when bridge completes or fails
+  useEffect(() => {
+    if (!isLoading && (step === "completed" || step === "failed") && showProgress) {
+      // Keep modal open to show final status
+      setTimeout(() => {
+        setShowProgress(false)
+        reset()
+      }, 5000) // Auto-close after 5 seconds
+    }
+  }, [isLoading, step, showProgress, reset])
 
   // Get balance for current network
   const { data: balanceData } = useBalance({
@@ -104,20 +135,31 @@ export default function BridgeForm() {
       return
     }
 
-    // Start bridge process
-    setIsSubmitting(true)
-    setShowProgress(true)
+    // Validate destination address
+    if (!destination.startsWith("0x") || destination.length !== 42) {
+      toast.error("Invalid destination address")
+      return
+    }
 
     try {
-      // This is where you would call the actual bridge function
-      // For now, we'll simulate the process
-      toast.success("Bridge initiated successfully!")
-    } catch (error) {
+      // Execute bridge transaction
+      await bridge({
+        sourceChain: fromNetwork.chain,
+        destChain: toNetwork.chain,
+        tokenSymbol: selectedToken,
+        amount,
+        recipient: destination as Address,
+      })
+
+      toast.success("Bridge completed successfully!")
+
+      // Reset form
+      setAmount("")
+      setDestinationAddress("")
+    } catch (error: unknown) {
       console.error("Bridge error:", error)
-      toast.error("Bridge failed. Please try again.")
-      setShowProgress(false)
-    } finally {
-      setIsSubmitting(false)
+      const errorMessage = error instanceof Error ? error.message : "Bridge failed"
+      toast.error(errorMessage)
     }
   }
 
@@ -239,7 +281,20 @@ export default function BridgeForm() {
                 {fromNetwork.symbol}
               </div>
             </div>
-            {amount && Number(amount) > 0 && <div className="mt-2 text-sm text-neutral-500">≈ $--.- USD</div>}
+            {amount && Number(amount) > 0 && (
+              <div className="mt-2 flex items-center gap-2 text-sm text-neutral-500">
+                {isLoadingUSD ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <span>Fetching price...</span>
+                  </>
+                ) : usdValue ? (
+                  <>≈ ${usdValue.toFixed(2)} USD</>
+                ) : (
+                  <>≈ $-- USD</>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Destination Address */}
@@ -279,9 +334,14 @@ export default function BridgeForm() {
             >
               <div className="flex items-center justify-between text-sm">
                 <span className="text-neutral-400">You send</span>
-                <span className="font-medium text-white">
-                  {amount} {fromNetwork.symbol}
-                </span>
+                <div className="text-right">
+                  <div className="font-medium text-white">
+                    {amount} {fromNetwork.symbol}
+                  </div>
+                  {usdValue && !isLoadingUSD && (
+                    <div className="text-xs text-neutral-500">≈ ${usdValue.toFixed(2)}</div>
+                  )}
+                </div>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-1 text-neutral-400">
@@ -297,10 +357,26 @@ export default function BridgeForm() {
                   <CheckCircle2 className="h-4 w-4 text-green-500" />
                   You receive
                 </span>
-                <span className="text-lg font-bold text-white">
-                  {fees.receive} {toNetwork.symbol}
-                </span>
+                <div className="text-right">
+                  <div className="text-lg font-bold text-white">
+                    {fees.receive} {toNetwork.symbol}
+                  </div>
+                  {isLoadingConversion && (
+                    <div className="flex items-center justify-end gap-1 text-xs text-neutral-500">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <span>Calculating...</span>
+                    </div>
+                  )}
+                </div>
               </div>
+              {price && !isLoadingUSD && (
+                <div className="flex items-center justify-between text-xs text-neutral-500">
+                  <span>Exchange rate</span>
+                  <span>
+                    1 {selectedToken} = ${price.toFixed(2)} USD
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between text-xs text-neutral-500">
                 <span className="flex items-center gap-1">
                   <Clock className="h-3 w-3" />
@@ -318,15 +394,22 @@ export default function BridgeForm() {
           {/* Bridge Button */}
           <Button
             onClick={handleBridge}
-            disabled={!isConnected || !amount || Number(amount) <= 0 || isSubmitting}
+            disabled={!isConnected || !amount || Number(amount) <= 0 || isLoading}
             className="h-12 w-full bg-orange-500 text-lg font-semibold text-white shadow-lg shadow-orange-500/20 transition-all duration-300 hover:scale-105 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
           >
             {!isConnected ? (
               "Connect Wallet"
             ) : chainId !== fromNetwork.id ? (
               `Switch to ${fromNetwork.name}`
-            ) : isSubmitting ? (
-              "Processing..."
+            ) : isLoading ? (
+              <>
+                {step === "generating-params" && "Generating privacy params..."}
+                {step === "signing-auth" && "Sign authorization..."}
+                {step === "approving-token" && "Approving token..."}
+                {step === "creating-intent" && "Creating intent..."}
+                {step === "submitting-backend" && "Submitting to backend..."}
+                {step === "waiting-solver" && "Waiting for solver..."}
+              </>
             ) : (
               <>
                 Bridge Now
@@ -350,11 +433,19 @@ export default function BridgeForm() {
       <AnimatePresence>
         {showProgress && (
           <BridgeProgress
-            onClose={() => setShowProgress(false)}
+            onClose={() => {
+              setShowProgress(false)
+              reset()
+            }}
             fromNetwork={fromNetwork.name}
             toNetwork={toNetwork.name}
             amount={amount}
-            token={fromNetwork.symbol}
+            token={selectedToken}
+            step={step}
+            intentId={intentId || undefined}
+            txHash={txHash || undefined}
+            status={status || undefined}
+            error={error || undefined}
           />
         )}
       </AnimatePresence>
