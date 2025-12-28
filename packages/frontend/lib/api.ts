@@ -15,7 +15,7 @@ import type { ChainType } from "./tokens";
  */
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
-  "https://international-linnie-mist-labs-2c5cd590.koyeb.app";
+  "https://international-linnie-mist-labs-2c5cd590.koyeb.app/api/v1";
 
 const HMAC_SECRET = process.env.NEXT_PUBLIC_HMAC_SECRET || "";
 
