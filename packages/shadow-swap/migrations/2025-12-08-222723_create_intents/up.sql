@@ -16,9 +16,13 @@ CREATE TABLE intents (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     deadline BIGINT NOT NULL,
-    refund_address VARCHAR(42)
+    refund_address VARCHAR(42),
+    solver_address VARCHAR(42),
 );
 
 CREATE INDEX idx_intents_status ON intents(status);
 CREATE INDEX idx_intents_dest_chain ON intents(dest_chain);
 CREATE INDEX idx_intents_created_at ON intents(created_at);
+CREATE INDEX idx_intents_solver_address ON intents(solver_address);
+CREATE INDEX idx_intents_solver_status ON intents(solver_address, status);
+COMMENT ON COLUMN intents.solver_address IS 'Ethereum address of the solver who filled this intent on the destination chain';

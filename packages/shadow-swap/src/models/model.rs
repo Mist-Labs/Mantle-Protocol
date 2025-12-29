@@ -75,6 +75,7 @@ pub struct Intent {
     pub updated_at: DateTime<Utc>,
     pub deadline: u64,
     pub refund_address: Option<String>,
+    pub solver_address: Option<String>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +95,8 @@ pub enum IntentStatus {
     Registered,
     Pending,
     Filled,
-    Completed,
+    SolverPaid,
+    UserClaimed,
     Refunded,
     Failed,
 }

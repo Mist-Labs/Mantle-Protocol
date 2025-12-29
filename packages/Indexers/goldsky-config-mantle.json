@@ -13,7 +13,7 @@
   "instances": [
     {
       "abi": "IntentPool",
-      "address": "0xdD6A1d4c2659A2d8B95BEAB203aFe0b197451ba6",
+      "address": "0x3ecB330Aa3EaE12bbc26022dE9ee140C06e3da43",
       "chain": "mantle-sepolia",
       "startBlock": 32216218
     },

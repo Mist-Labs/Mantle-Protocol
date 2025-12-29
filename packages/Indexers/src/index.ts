@@ -4,12 +4,13 @@ import { GoldskyWebhookPayload } from "./types";
 import { eventQueue, initQueue } from "./queue";
 
 const SUPPORTED_EVENTS = [
-  "intent_created",
-  "intent_registered",
-  "intent_filled",
-  "intent_refunded",
-  "withdrawal_claimed",
-  "root_synced",
+  "IntentCreated",
+  "IntentRegistered",
+  "IntentFilled",
+  "IntentMarkedFilled",
+  "IntentRefunded",
+  "WithdrawalClaimed",
+  "RootSynced",
 ];
 
 const SUPPORTED_CHAINS = [5003, 11155111];

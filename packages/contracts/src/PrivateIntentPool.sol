@@ -50,7 +50,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     address public immutable FEE_COLLECTOR;
 
     uint256 public constant DEFAULT_INTENT_TIMEOUT = 6 hours;
-    uint256 public constant FEE_BPS = 10; // 0.1%
+    uint256 public constant FEE_BPS = 20; // 0.2%
     address public constant NATIVE_ETH =
         address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
 
@@ -61,16 +61,8 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         address token,
         uint256 amount
     );
-    event IntentFilled(
-        bytes32 indexed intentId,
-        address indexed solver,
-        address indexed token,
-        uint256 amount
-    );
-    event IntentRefunded(
-        bytes32 indexed intentId,
-        uint256 amount
-    );
+    event IntentMarkedFilled(bytes32 indexed intentId, address indexed solver, bytes32 fillRoot);
+    event IntentRefunded(bytes32 indexed intentId, uint256 amount);
     event RootSynced(uint32 indexed chainId, bytes32 root);
     event MerkleRootUpdated(bytes32 root);
     event TokenAdded(
@@ -100,6 +92,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     error InvalidTokenConfig();
     error InsufficientBalance();
     error InvalidDeadline();
+    error InvalidAddress();
     error DirectETHDepositNotAllowed();
 
     modifier onlyRelayer() {
@@ -199,13 +192,14 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
 
     /**
      * @notice Mark intent as filled after cross-chain verification
-     * @dev Called by solver after filling on destination chain - proves fill happened
+     * @dev Called by relayer after filling on destination chain - proves fill happened
      * @param intentId The unique identifier of the intent
      * @param merkleProof Merkle proof showing intentId exists in destination fillTree
      * @param leafIndex Position of the intentId in destination merkle tree
      */
     function markFilled(
         bytes32 intentId,
+        address solver,
         bytes32[] calldata merkleProof,
         uint256 leafIndex
     ) external nonReentrant {
@@ -214,6 +208,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         // Validate intent state
         if (intent.commitment == bytes32(0)) revert IntentNotFound();
         if (intent.filled || intent.refunded) revert IntentAlreadyFilled();
+        if (solver == address(0)) revert InvalidAddress();
 
         // Get synced root from destination chain
         bytes32 destRoot = destChainRoots[intent.destChain];
@@ -236,7 +231,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
 
         // Mark as filled (CEI pattern)
         intent.filled = true;
-        intentSolvers[intentId] = msg.sender;
+        intentSolvers[intentId] = solver;
 
         // Calculate distribution
         uint256 fee = (intent.amount * FEE_BPS) / 10000;
@@ -244,13 +239,13 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
 
         // Transfer to solver and fee collector
         if (intent.token == NATIVE_ETH) {
-            (bool success1, ) = msg.sender.call{value: solverAmount}("");
+            (bool success1, ) = solver.call{value: solverAmount}("");
             if (!success1) revert TransferFailed();
 
             (bool success2, ) = FEE_COLLECTOR.call{value: fee}("");
             if (!success2) revert TransferFailed();
         } else {
-            if (!IERC20(intent.token).transfer(msg.sender, solverAmount)) {
+            if (!IERC20(intent.token).transfer(solver, solverAmount)) {
                 revert TransferFailed();
             }
 
@@ -259,7 +254,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             }
         }
 
-        emit IntentFilled(intentId, msg.sender, intent.token, solverAmount);
+        emit IntentMarkedFilled(intentId, solver, _computeMerkleRoot()); 
     }
 
     /**

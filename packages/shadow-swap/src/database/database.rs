@@ -148,6 +148,7 @@ impl Database {
             updated_at: intent.updated_at,
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
+            solver_address: intent.solver_address.as_deref(),
         };
 
         diesel::insert_into(intents::table)
@@ -184,6 +185,7 @@ impl Database {
                 updated_at: intent.updated_at,
                 deadline: intent.deadline as i64,
                 refund_address: intent.refund_address.as_deref(),
+                solver_address: intent.solver_address.as_deref(),
             };
 
             diesel::insert_into(intents::table)
@@ -441,6 +443,7 @@ impl Database {
             updated_at: intent.updated_at,
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
+            solver_address: intent.solver_address.as_deref(),
         };
 
         diesel::update(intents::table.filter(intents::id.eq(&intent.id)))
@@ -535,6 +538,89 @@ impl Database {
             0,
             tx_hash,
         )
+    }
+
+    // ==================== SOLVER-RELATED OPERATIONS ====================
+    pub fn get_intent_solver(&self, intent_id: &str) -> Result<Option<String>> {
+        let mut conn = self.get_connection()?;
+
+        let solver_address = intents::table
+            .filter(intents::id.eq(intent_id))
+            .select(intents::solver_address)
+            .first::<Option<String>>(&mut conn)
+            .optional()
+            .context("Failed to get solver address")?;
+
+        Ok(solver_address.flatten())
+    }
+
+    pub fn update_intent_with_solver(
+        &self,
+        intent_id: &str,
+        solver_address: &str,
+        status: IntentStatus,
+    ) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(intents::table.filter(intents::id.eq(intent_id)))
+            .set((
+                intents::solver_address.eq(solver_address),
+                intents::status.eq(status.as_str()),
+                intents::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to update intent with solver")?;
+
+        Ok(())
+    }
+
+    pub fn update_solver_address(&self, intent_id: &str, solver_address: &str) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(intents::table.filter(intents::id.eq(intent_id)))
+            .set((
+                intents::solver_address.eq(solver_address),
+                intents::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to update solver address")?;
+
+        Ok(())
+    }
+
+    pub fn get_intents_by_solver(&self, solver_address: &str, limit: usize) -> Result<Vec<Intent>> {
+        let mut conn = self.get_connection()?;
+
+        let results = intents::table
+            .filter(intents::solver_address.eq(solver_address))
+            .order(intents::created_at.desc())
+            .limit(limit as i64)
+            .select(DbIntent::as_select())
+            .load::<DbIntent>(&mut conn)
+            .context("Failed to get intents by solver")?;
+
+        Ok(results.into_iter().map(db_intent_to_model).collect())
+    }
+
+    pub fn get_solver_stats(&self, solver_address: &str) -> Result<(i64, f64)> {
+        let mut conn = self.get_connection()?;
+
+        // Count total intents filled by this solver
+        let total_filled = intents::table
+            .filter(intents::solver_address.eq(solver_address))
+            .filter(intents::status.eq_any(vec!["filled", "completed", "solver_paid"]))
+            .count()
+            .get_result::<i64>(&mut conn)
+            .context("Failed to count solver intents")?;
+
+        // Calculate total volume (simplified - you may want to handle decimals better)
+        let intents_list = self.get_intents_by_solver(solver_address, 10000)?;
+        let total_volume: f64 = intents_list
+            .iter()
+            .filter_map(|intent| intent.amount.parse::<f64>().ok())
+            .sum();
+
+        Ok((total_filled, total_volume))
     }
 
     // ==================== Chain Transaction Logging ====================
@@ -1411,8 +1497,12 @@ impl Database {
 fn parse_status(s: &str) -> IntentStatus {
     match s {
         "created" => IntentStatus::Created,
+        "registered" => IntentStatus::Registered,
+        "committed" => IntentStatus::Committed,
+        "pending" => IntentStatus::Pending,
         "filled" => IntentStatus::Filled,
-        "completed" => IntentStatus::Completed,
+        "user_claimed" => IntentStatus::UserClaimed,
+        "solver_paid" => IntentStatus::SolverPaid,
         "refunded" => IntentStatus::Refunded,
         "failed" => IntentStatus::Failed,
         _ => IntentStatus::Failed,
@@ -1438,5 +1528,6 @@ fn db_intent_to_model(r: DbIntent) -> Intent {
         updated_at: r.updated_at,
         deadline: r.deadline as u64,
         refund_address: r.refund_address,
+        solver_address: r.solver_address,
     }
 }

@@ -17,6 +17,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.0", features = ["v4"] }
 reqwest = { version = "0.12", features = ["json"] }
+ecies = { version = "0.2", default-features = false, features = ["pure"] }
+secp256k1 = { version = "0.28", features = ["rand", "recovery"] }
 hex = "0.4"
 r2d2 = "0.8"
 log = "0.4"

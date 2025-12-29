@@ -20,6 +20,7 @@
   { "inputs": [], "name": "IntentAlreadyFilled", "type": "error" },
   { "inputs": [], "name": "IntentNotExpired", "type": "error" },
   { "inputs": [], "name": "IntentNotFound", "type": "error" },
+  { "inputs": [], "name": "InvalidAddress", "type": "error" },
   { "inputs": [], "name": "InvalidAmount", "type": "error" },
   { "inputs": [], "name": "InvalidDeadline", "type": "error" },
   { "inputs": [], "name": "InvalidProof", "type": "error" },
@@ -97,19 +98,13 @@
         "type": "address"
       },
       {
-        "indexed": true,
-        "internalType": "address",
-        "name": "token",
-        "type": "address"
-      },
-      {
         "indexed": false,
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
+        "internalType": "bytes32",
+        "name": "fillRoot",
+        "type": "bytes32"
       }
     ],
-    "name": "IntentFilled",
+    "name": "IntentMarkedFilled",
     "type": "event"
   },
   {
@@ -510,6 +505,7 @@
   {
     "inputs": [
       { "internalType": "bytes32", "name": "intentId", "type": "bytes32" },
+      { "internalType": "address", "name": "solver", "type": "address" },
       {
         "internalType": "bytes32[]",
         "name": "merkleProof",

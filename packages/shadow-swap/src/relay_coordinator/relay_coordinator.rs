@@ -5,16 +5,14 @@ use tokio::{
     sync::RwLock,
     time::{self, interval, sleep},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::{
     database::database::Database,
+    encryption::encryption_utils::decrypt_with_ecies,
     merkle_manager::merkle_manager::MerkleTreeManager,
     models::{
-        model::{
-            BridgeDirection, BridgeMetrics, Intent, IntentOperationState, IntentStatus,
-            TokenBridgeInfo, TokenType,
-        },
+        model::{BridgeMetrics, Intent, IntentOperationState, IntentStatus, TokenType},
         traits::ChainRelayer,
     },
     relay_coordinator::model::{BridgeCoordinator, EthereumRelayer, MantleRelayer},
@@ -27,15 +25,15 @@ impl TokenType {
     pub fn from_address(address: &str) -> Result<Self> {
         match address.to_lowercase().as_str() {
             "0x0000000000000000000000000000000000000000" => Ok(Self::ETH),
-            "0x28650373758d75a8fF0B22587F111e47BAC34e21" => Ok(Self::USDC),
-            "0x89F4f0e13997Ca27cEB963DEE291C607e4E59923" => Ok(Self::USDT),
-            "0x50e8Da97BeEB8064714dE45ce1F250879f3bD5B5" => Ok(Self::WETH),
-            "0x65e37B558F64E2Be5768DB46DF22F93d85741A9E" => Ok(Self::MNT),
+            "0x28650373758d75a8ff0b22587f111e47bac34e21" => Ok(Self::USDC),
+            "0x89f4f0e13997ca27ceb963dee291c607e4e59923" => Ok(Self::USDT),
+            "0x50e8da97beeb8064714de45ce1f250879f3bd5b5" => Ok(Self::WETH),
+            "0x65e37b558f64e2be5768db46df22f93d85741a9e" => Ok(Self::MNT),
 
-            "0xA4b184006B59861f80521649b14E4E8A72499A23" => Ok(Self::USDC),
-            "0xB0ee6EF7788E9122fc4AAE327Ed4FEf56c7da891" => Ok(Self::USDT),
+            "0xa4b184006b59861f80521649b14e4e8a72499a23" => Ok(Self::USDC),
+            "0xb0ee6ef7788e9122fc4aae327ed4fef56c7da891" => Ok(Self::USDT),
             "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111" => Ok(Self::WETH),
-            "0x44FCE297e4D6c5A50D28Fb26A58202e4D49a13E7" => Ok(Self::MNT),
+            "0x44fce297e4d6c5a50d28fb26a58202e4d49a13e7" => Ok(Self::MNT),
             _ => Err(anyhow!("Unsupported token address: {}", address)),
         }
     }
@@ -151,50 +149,12 @@ impl BridgeCoordinator {
         }
     }
 
-    fn resolve_token_bridge_info(
-        &self,
-        source_token: &str,
-        amount: &str,
-        direction: &BridgeDirection,
-    ) -> Result<TokenBridgeInfo> {
-        let token_type = TokenType::from_address(source_token)?;
-
-        let (source_address, dest_address) = match direction {
-            BridgeDirection::EthereumToMantle => (
-                token_type.get_ethereum_address().to_string(),
-                token_type.get_mantle_address().to_string(),
-            ),
-            BridgeDirection::MantleToEthereum => (
-                token_type.get_mantle_address().to_string(),
-                token_type.get_ethereum_address().to_string(),
-            ),
-            BridgeDirection::Unknown => return Err(anyhow!("Unknown bridge direction")),
-        };
-
-        if dest_address == "0x0000000000000000000000000000000000000000"
-            && token_type != TokenType::ETH
-        {
-            return Err(anyhow!(
-                "Token {} not supported on destination chain",
-                token_type.symbol()
-            ));
-        }
-
-        Ok(TokenBridgeInfo {
-            token_type,
-            source_address,
-            dest_address,
-            amount: amount.to_string(),
-            decimals: token_type.get_decimals(),
-        })
-    }
-
     pub async fn start(&self) -> Result<(), String> {
-        info!("🌉 Starting multi-token Mantle bridge coordinator");
+        info!("🌉 Starting bridge coordinator (relayer-only mode)");
 
+        // Metrics updater
         let metrics = Arc::clone(&self.metrics);
         let start_time = self.start_time;
-
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(10));
             loop {
@@ -204,6 +164,7 @@ impl BridgeCoordinator {
             }
         });
 
+        // Merkle tree manager
         let merkle_manager = Arc::clone(&self.merkle_tree_manager);
         tokio::spawn(async move {
             if let Err(e) = merkle_manager.start().await {
@@ -211,6 +172,7 @@ impl BridgeCoordinator {
             }
         });
 
+        // Main processing loop
         loop {
             if let Err(e) = self.process_pending_intents().await {
                 error!("❌ Error processing pending intents: {}", e);
@@ -228,30 +190,37 @@ impl BridgeCoordinator {
             .map_err(|e| anyhow!("Failed to get pending intents: {}", e))?;
 
         if pending_intents.is_empty() {
-            debug!("No pending intents to process");
             return Ok(());
         }
 
         for intent in pending_intents {
-            debug!(
-                "🔄 Processing intent: {} (status: {:?})",
-                intent.id, intent.status
-            );
-
             {
                 let mut metrics = self.metrics.write().await;
                 metrics.total_intents_processed += 1;
             }
 
             match intent.status {
-                IntentStatus::Created => {
-                    if let Err(e) = self.handle_created_intent(&intent).await {
-                        error!("Failed to handle created intent {}: {}", intent.id, e);
+                IntentStatus::Committed => {
+                    // Relayer registers intent on destination chain
+                    if let Err(e) = self.register_intent_on_dest_chain(&intent).await {
+                        error!("Failed to register intent {}: {}", intent.id, e);
+                        self.record_error(format!("Registration failed: {}", e))
+                            .await;
                     }
                 }
                 IntentStatus::Filled => {
-                    if let Err(e) = self.handle_filled_intent(&intent).await {
-                        error!("Failed to handle filled intent {}: {}", intent.id, e);
+                    // After solver fills, relayer claims for user
+                    if let Err(e) = self.claim_for_user(&intent).await {
+                        error!("Failed to claim for user {}: {}", intent.id, e);
+                        self.record_error(format!("Claim failed: {}", e)).await;
+                    }
+                }
+                IntentStatus::UserClaimed => {
+                    // After user claimed, relayer marks filled on source chain
+                    if let Err(e) = self.mark_filled_on_source_chain(&intent).await {
+                        error!("Failed to mark filled for intent {}: {}", intent.id, e);
+                        self.record_error(format!("Mark filled failed: {}", e))
+                            .await;
                     }
                 }
                 _ => {}
@@ -261,232 +230,165 @@ impl BridgeCoordinator {
         Ok(())
     }
 
-    async fn handle_created_intent(&self, intent: &Intent) -> Result<()> {
-        let direction = self.determine_bridge_direction(intent);
-        let token_info =
-            self.resolve_token_bridge_info(&intent.source_token, &intent.amount, &direction)?;
+    // ============================================================================
+    // PHASE 1: REGISTER INTENT ON DESTINATION CHAIN
+    // ============================================================================
+
+    async fn register_intent_on_dest_chain(&self, intent: &Intent) -> Result<()> {
+        if intent.source_commitment.is_none() {
+            return Err(anyhow!("Intent not yet committed on source chain"));
+        }
+
+        // Check if already registered
+        if intent.dest_registration_txid.is_some() {
+            debug!("Intent {} already registered", intent.id);
+            return Ok(());
+        }
 
         info!(
-            "📦 Processing {} bridge: {} {}",
-            token_info.token_type.symbol(),
-            token_info.amount,
-            match direction {
-                BridgeDirection::EthereumToMantle => "ETH→Mantle",
-                BridgeDirection::MantleToEthereum => "Mantle→ETH",
-                BridgeDirection::Unknown => "Unknown",
-            }
+            "📦 Registering intent {} on destination chain: {}",
+            intent.id, intent.dest_chain
         );
 
-        match direction {
-            BridgeDirection::EthereumToMantle => {
-                self.handle_ethereum_to_mantle(intent, &token_info).await?;
-            }
-            BridgeDirection::MantleToEthereum => {
-                self.handle_mantle_to_ethereum(intent, &token_info).await?;
-            }
-            BridgeDirection::Unknown => {
-                warn!("Unknown bridge direction for intent {}", intent.id);
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn handle_ethereum_to_mantle(
-        &self,
-        intent: &Intent,
-        token_info: &TokenBridgeInfo,
-    ) -> Result<()> {
-        if intent.source_commitment.is_none() {
-            return Err(anyhow!("Intent not yet committed on Ethereum"));
-        }
-
-        if intent.dest_fill_txid.is_none() {
-            info!(
-                "🔨 Filling {} intent on Mantle for {}",
-                token_info.token_type.symbol(),
-                intent.id
-            );
-
-            let privacy_params = self
-                .database
-                .get_intent_privacy_params(&intent.id)
-                .map_err(|e| anyhow!("Failed to get privacy params: {}", e))?;
-
-            let commitment = privacy_params
-                .commitment
-                .ok_or_else(|| anyhow!("Missing commitment"))?;
-
-            let result = self
-                .mantle_relayer
-                .fill_intent(
-                    &intent.id,
-                    &commitment,
-                    ETHEREUM_CHAIN_ID, // Source chain
-                    &token_info.dest_address,
-                    &intent.amount,
-                )
-                .await;
-
-            match result {
-                Ok(txid) => {
-                    self.database
-                        .update_dest_fill_txid(&intent.id, &txid)
-                        .map_err(|e| anyhow!("Failed to update dest txid: {}", e))?;
-
-                    self.database
-                        .update_intent_status(&intent.id, IntentStatus::Filled)
-                        .map_err(|e| anyhow!("Failed to update status: {}", e))?;
-
-                    let mut metrics = self.metrics.write().await;
-                    metrics.mantle_fills += 1;
-
-                    let volume = intent.amount.parse::<u128>().unwrap_or(0);
-                    *metrics
-                        .volumes_by_token
-                        .entry(token_info.token_type.clone())
-                        .or_insert(0) += volume;
-
-                    info!(
-                        "✅ {} intent filled on Mantle: {}",
-                        token_info.token_type.symbol(),
-                        txid
-                    );
-                }
-                Err(e) => {
-                    error!(
-                        "❌ Failed to fill {} intent on Mantle: {}",
-                        token_info.token_type.symbol(),
-                        e
-                    );
-                    return Err(anyhow!("Mantle fill failed: {}", e));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn handle_mantle_to_ethereum(
-        &self,
-        intent: &Intent,
-        token_info: &TokenBridgeInfo,
-    ) -> Result<()> {
-        if intent.source_commitment.is_none() {
-            return Err(anyhow!("Intent not yet committed on Mantle"));
-        }
-
-        if intent.dest_fill_txid.is_none() {
-            info!(
-                "🔨 Filling {} intent on Ethereum for {}",
-                token_info.token_type.symbol(),
-                intent.id
-            );
-
-            let privacy_params = self
-                .database
-                .get_intent_privacy_params(&intent.id)
-                .map_err(|e| anyhow!("Failed to get privacy params: {}", e))?;
-
-            let commitment = privacy_params
-                .commitment
-                .ok_or_else(|| anyhow!("Missing commitment"))?;
-
-            let result = self
-                .ethereum_relayer
-                .fill_intent(
-                    &intent.id,
-                    &commitment,
-                    MANTLE_CHAIN_ID,
-                    &token_info.dest_address,
-                    &intent.amount,
-                )
-                .await;
-
-            match result {
-                Ok(txid) => {
-                    self.database
-                        .update_dest_fill_txid(&intent.id, &txid)
-                        .map_err(|e| anyhow!("Failed to update dest txid: {}", e))?;
-
-                    self.database
-                        .update_intent_status(&intent.id, IntentStatus::Filled)
-                        .map_err(|e| anyhow!("Failed to update status: {}", e))?;
-
-                    let mut metrics = self.metrics.write().await;
-                    metrics.ethereum_fills += 1;
-
-                    let volume = intent.amount.parse::<u128>().unwrap_or(0);
-                    *metrics
-                        .volumes_by_token
-                        .entry(token_info.token_type.clone())
-                        .or_insert(0) += volume;
-
-                    info!(
-                        "✅ {} intent filled on Ethereum: {}",
-                        token_info.token_type.symbol(),
-                        txid
-                    );
-                }
-                Err(e) => {
-                    error!(
-                        "❌ Failed to fill {} intent on Ethereum: {}",
-                        token_info.token_type.symbol(),
-                        e
-                    );
-                    return Err(anyhow!("Ethereum fill failed: {}", e));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn handle_filled_intent(&self, intent: &Intent) -> Result<()> {
-        let direction = self.determine_bridge_direction(intent);
-        let token_info =
-            self.resolve_token_bridge_info(&intent.source_token, &intent.amount, &direction)?;
-
-        let now = chrono::Utc::now().timestamp() as u64;
-        if now > intent.deadline {
-            info!("⏰ Intent {} expired, initiating refund", intent.id);
-            return self.handle_refund(intent, &token_info).await;
-        }
-
-        match direction {
-            BridgeDirection::EthereumToMantle => {
-                self.claim_on_mantle(intent, &token_info).await?;
-                self.mark_source_filled_on_ethereum(intent, &token_info)
-                    .await?;
-            }
-            BridgeDirection::MantleToEthereum => {
-                self.claim_on_ethereum(intent, &token_info).await?;
-                self.mark_source_filled_on_mantle(intent, &token_info)
-                    .await?;
-            }
-            BridgeDirection::Unknown => {
-                return Err(anyhow!("Cannot claim intent with unknown direction"));
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn claim_on_mantle(&self, intent: &Intent, token_info: &TokenBridgeInfo) -> Result<()> {
         let privacy_params = self
             .database
             .get_intent_privacy_params(&intent.id)
             .map_err(|e| anyhow!("Failed to get privacy params: {}", e))?;
 
-        let secret = privacy_params
+        let commitment = privacy_params
+            .commitment
+            .ok_or_else(|| anyhow!("Missing commitment"))?;
+
+        // Route based on destination chain
+        match intent.dest_chain.as_str() {
+            "mantle" => self.register_on_mantle(&intent, &commitment).await,
+            "ethereum" => self.register_on_ethereum(&intent, &commitment).await,
+            _ => Err(anyhow!(
+                "Unsupported destination chain: {}",
+                intent.dest_chain
+            )),
+        }
+    }
+
+    async fn register_on_mantle(&self, intent: &Intent, commitment: &str) -> Result<()> {
+        // Get merkle proof from source chain (Ethereum IntentPool)
+        let (proof, leaf_index) = self
+            .ethereum_relayer
+            .get_commitment_proof(commitment)
+            .await?;
+
+        let source_root = self.ethereum_relayer.get_merkle_root().await?;
+
+        // Determine destination token address
+        let token_type = TokenType::from_address(&intent.source_token)?;
+        let dest_token = token_type.get_mantle_address();
+
+        // Call Settlement.registerIntent on Mantle
+        let txid = self
+            .mantle_relayer
+            .register_intent(
+                &intent.id,
+                commitment,
+                dest_token,
+                &intent.amount,
+                ETHEREUM_CHAIN_ID,
+                intent.deadline,
+                &source_root,
+                &proof,
+                leaf_index,
+            )
+            .await?;
+
+        self.database
+            .update_dest_registration_txid(&intent.id, &txid)
+            .map_err(|e| anyhow!("Failed to update registration txid: {}", e))?;
+
+        self.database
+            .update_intent_status(&intent.id, IntentStatus::Registered)
+            .map_err(|e| anyhow!("Failed to update status: {}", e))?;
+
+        info!("✅ Intent {} registered on Mantle: {}", intent.id, txid);
+        Ok(())
+    }
+
+    async fn register_on_ethereum(&self, intent: &Intent, commitment: &str) -> Result<()> {
+        // Get merkle proof from source chain (Mantle IntentPool)
+        let (proof, leaf_index) = self.mantle_relayer.get_commitment_proof(commitment).await?;
+
+        let source_root = self.mantle_relayer.get_merkle_root().await?;
+
+        // Determine destination token address
+        let token_type = TokenType::from_address(&intent.source_token)?;
+        let dest_token = token_type.get_ethereum_address();
+
+        let txid = self
+            .ethereum_relayer
+            .register_intent(
+                &intent.id,
+                commitment,
+                dest_token,
+                &intent.amount,
+                MANTLE_CHAIN_ID,
+                intent.deadline,
+                &source_root,
+                &proof,
+                leaf_index,
+            )
+            .await?;
+
+        self.database
+            .update_dest_registration_txid(&intent.id, &txid)
+            .map_err(|e| anyhow!("Failed to update registration txid: {}", e))?;
+
+        self.database
+            .update_intent_status(&intent.id, IntentStatus::Registered)
+            .map_err(|e| anyhow!("Failed to update status: {}", e))?;
+
+        info!("✅ Intent {} registered on Ethereum: {}", intent.id, txid);
+        Ok(())
+    }
+
+    // ============================================================================
+    // PHASE 2: CLAIM WITHDRAWAL FOR USER (AFTER SOLVER FILLS)
+    // ============================================================================
+
+    async fn claim_for_user(&self, intent: &Intent) -> Result<()> {
+        // Check deadline
+        let now = chrono::Utc::now().timestamp() as u64;
+        if now > intent.deadline {
+            info!("⏰ Intent {} expired, initiating refund", intent.id);
+            return self.handle_refund(intent).await;
+        }
+
+        info!("💸 Claiming withdrawal for user on {}", intent.dest_chain);
+
+        // Route based on destination chain
+        match intent.dest_chain.as_str() {
+            "mantle" => self.claim_on_mantle(intent).await,
+            "ethereum" => self.claim_on_ethereum(intent).await,
+            _ => Err(anyhow!(
+                "Unsupported destination chain: {}",
+                intent.dest_chain
+            )),
+        }
+    }
+
+    async fn claim_on_mantle(&self, intent: &Intent) -> Result<()> {
+        let privacy_params = self
+            .database
+            .get_intent_privacy_params(&intent.id)
+            .map_err(|e| anyhow!("Failed to get privacy params: {}", e))?;
+
+        // Get encrypted values from database
+        let encrypted_secret = privacy_params
             .secret
             .as_ref()
-            .ok_or_else(|| anyhow!("Secret not available"))?;
+            .ok_or_else(|| anyhow!("Encrypted secret not available"))?;
 
-        let nullifier = privacy_params
+        let encrypted_nullifier = privacy_params
             .nullifier
             .as_ref()
-            .ok_or_else(|| anyhow!("Nullifier not available"))?;
+            .ok_or_else(|| anyhow!("Encrypted nullifier not available"))?;
 
         let recipient = privacy_params
             .recipient
@@ -498,54 +400,63 @@ impl BridgeCoordinator {
             .as_ref()
             .ok_or_else(|| anyhow!("Claim signature not available"))?;
 
+        let relayer_private_key = std::env::var("RELAYER_PRIVATE_KEY")
+            .map_err(|_| anyhow!("RELAYER_PRIVATE_KEY not set in environment"))?;
+
+        // Decrypt secret and nullifier
+        let secret = decrypt_with_ecies(encrypted_secret, &relayer_private_key)
+            .map_err(|e| anyhow!("Failed to decrypt secret: {}", e))?;
+
+        let nullifier = decrypt_with_ecies(encrypted_nullifier, &relayer_private_key)
+            .map_err(|e| anyhow!("Failed to decrypt nullifier: {}", e))?;
+
+        info!("🔓 Decrypted secret and nullifier for intent {}", intent.id);
+
+        // Call contract with decrypted values
         let result = self
             .mantle_relayer
             .claim_withdrawal(
                 &intent.id,
-                nullifier,
+                &nullifier,
                 recipient,
-                secret,
+                &secret,
                 claim_auth.as_bytes(),
             )
             .await;
 
-        drop(privacy_params);
+        drop(privacy_params); // Drop to free memory
 
         match result {
             Ok(txid) => {
-                info!(
-                    "✅ Claimed {} on Mantle: {}",
-                    token_info.token_type.symbol(),
-                    txid
-                );
+                info!("✅ Claimed withdrawal on Mantle: {}", txid);
+
+                self.database
+                    .update_intent_status(&intent.id, IntentStatus::UserClaimed)
+                    .map_err(|e| anyhow!("Failed to update status: {}", e))?;
+
                 let mut metrics = self.metrics.write().await;
                 metrics.mantle_claims += 1;
                 Ok(())
             }
             Err(e) => {
-                error!(
-                    "❌ Mantle claim failed for {}: {}",
-                    token_info.token_type.symbol(),
-                    e
-                );
+                error!("❌ Mantle claim failed: {}", e);
                 Err(anyhow!("Mantle claim failed: {}", e))
             }
         }
     }
 
-    async fn claim_on_ethereum(&self, intent: &Intent, token_info: &TokenBridgeInfo) -> Result<()> {
-        // Fetch secret just-in-time (not from parameters)
+    async fn claim_on_ethereum(&self, intent: &Intent) -> Result<()> {
         let privacy_params = self
             .database
             .get_intent_privacy_params(&intent.id)
             .map_err(|e| anyhow!("Failed to get privacy params: {}", e))?;
 
-        let secret = privacy_params
+        let encrypted_secret = privacy_params
             .secret
             .as_ref()
             .ok_or_else(|| anyhow!("Secret not available"))?;
 
-        let nullifier = privacy_params
+        let encrypted_nullifier = privacy_params
             .nullifier
             .as_ref()
             .ok_or_else(|| anyhow!("Nullifier not available"))?;
@@ -560,143 +471,162 @@ impl BridgeCoordinator {
             .as_ref()
             .ok_or_else(|| anyhow!("Claim signature not available"))?;
 
+        let relayer_private_key = std::env::var("RELAYER_PRIVATE_KEY")
+            .map_err(|_| anyhow!("RELAYER_PRIVATE_KEY not set in environment"))?;
+
+        // Decrypt secret and nullifier
+        let secret = decrypt_with_ecies(encrypted_secret, &relayer_private_key)
+            .map_err(|e| anyhow!("Failed to decrypt secret: {}", e))?;
+
+        let nullifier = decrypt_with_ecies(encrypted_nullifier, &relayer_private_key)
+            .map_err(|e| anyhow!("Failed to decrypt nullifier: {}", e))?;
+
+        info!("🔓 Decrypted secret and nullifier for intent {}", intent.id);
+
         let result = self
             .ethereum_relayer
             .claim_withdrawal(
                 &intent.id,
-                nullifier,
+                &nullifier,
                 recipient,
-                secret,
+                &secret,
                 claim_auth.as_bytes(),
             )
             .await;
 
-        // Secret dropped immediately after use
         drop(privacy_params);
 
         match result {
             Ok(txid) => {
-                info!(
-                    "✅ Claimed {} on Ethereum: {}",
-                    token_info.token_type.symbol(),
-                    txid
-                );
+                info!("✅ Claimed withdrawal on Ethereum: {}", txid);
+
+                self.database
+                    .update_intent_status(&intent.id, IntentStatus::UserClaimed)
+                    .map_err(|e| anyhow!("Failed to update status: {}", e))?;
+
                 let mut metrics = self.metrics.write().await;
                 metrics.ethereum_claims += 1;
                 Ok(())
             }
             Err(e) => {
-                error!(
-                    "❌ Ethereum claim failed for {}: {}",
-                    token_info.token_type.symbol(),
-                    e
-                );
+                error!("❌ Ethereum claim failed: {}", e);
                 Err(anyhow!("Ethereum claim failed: {}", e))
             }
         }
     }
 
-    async fn mark_source_filled_on_ethereum(
-        &self,
-        intent: &Intent,
-        token_info: &TokenBridgeInfo,
-    ) -> Result<()> {
-        // ✅ Get proof from Mantle Settlement contract (on-chain)
-        let merkle_proof = self.mantle_relayer.get_fill_proof(&intent.id).await?;
+    // ============================================================================
+    // PHASE 3: MARK FILLED ON SOURCE CHAIN (SOLVER GETS PAID)
+    // ============================================================================
 
+    async fn mark_filled_on_source_chain(&self, intent: &Intent) -> Result<()> {
+        info!(
+            "💰 Marking intent {} as filled on source chain: {} (solver gets paid)",
+            intent.id, intent.source_chain
+        );
+
+        // Route based on source chain
+        match intent.source_chain.as_str() {
+            "ethereum" => self.mark_filled_on_ethereum(intent).await,
+            "mantle" => self.mark_filled_on_mantle(intent).await,
+            _ => Err(anyhow!("Unsupported source chain: {}", intent.source_chain)),
+        }
+    }
+
+    async fn mark_filled_on_ethereum(&self, intent: &Intent) -> Result<()> {
+        let solver_address = self
+        .database
+        .get_intent_solver(&intent.id)
+        .map_err(|e| anyhow!("Failed to get solver address: {}", e))?
+        .ok_or_else(|| anyhow!("Solver address not found for intent {}", intent.id))?;
+
+        let merkle_proof = self.mantle_relayer.get_fill_proof(&intent.id).await?;
         let leaf_index = self.mantle_relayer.get_fill_index(&intent.id).await?;
 
         let result = self
             .ethereum_relayer
-            .mark_filled(&intent.id, &merkle_proof, leaf_index)
+            .mark_filled(&intent.id, &solver_address, &merkle_proof, leaf_index)
             .await;
 
         match result {
             Ok(txid) => {
-                info!(
-                    "✅ Marked {} filled on Ethereum: {}",
-                    token_info.token_type.symbol(),
-                    txid
-                );
+                info!("✅ Marked filled on Ethereum (solver {} paid): {}", solver_address, txid);
+
                 self.database
-                    .update_intent_status(&intent.id, IntentStatus::Completed)
+                    .update_intent_status(&intent.id, IntentStatus::SolverPaid)
                     .map_err(|e| anyhow!("Failed to update status: {}", e))?;
 
                 let mut metrics = self.metrics.write().await;
                 metrics.successful_bridges += 1;
+
+                Ok(())
             }
             Err(e) => {
-                error!(
-                    "❌ Failed to mark {} filled on Ethereum: {}",
-                    token_info.token_type.symbol(),
-                    e
-                );
-                return Err(anyhow!("Mark filled failed: {}", e));
+                error!("❌ Failed to mark filled on Ethereum: {}", e);
+                Err(anyhow!("Mark filled failed: {}", e))
             }
         }
-
-        Ok(())
     }
 
-    async fn mark_source_filled_on_mantle(
-        &self,
-        intent: &Intent,
-        token_info: &TokenBridgeInfo,
-    ) -> Result<()> {
-        // ✅ Get proof from Ethereum Settlement contract (on-chain)
-        let merkle_proof = self.ethereum_relayer.get_fill_proof(&intent.id).await?;
+    async fn mark_filled_on_mantle(&self, intent: &Intent) -> Result<()> {
+        let solver_address = self
+        .database
+        .get_intent_solver(&intent.id)
+        .map_err(|e| anyhow!("Failed to get solver address: {}", e))?
+        .ok_or_else(|| anyhow!("Solver address not found for intent {}", intent.id))?;
 
+        let merkle_proof = self.ethereum_relayer.get_fill_proof(&intent.id).await?;
         let leaf_index = self.ethereum_relayer.get_fill_index(&intent.id).await?;
 
         let result = self
             .mantle_relayer
-            .mark_filled(&intent.id, &merkle_proof, leaf_index.try_into()?)
+            .mark_filled(&intent.id, &solver_address, &merkle_proof, leaf_index.try_into()?)
             .await;
 
         match result {
             Ok(txid) => {
-                info!(
-                    "✅ Marked {} filled on Mantle: {}",
-                    token_info.token_type.symbol(),
-                    txid
-                );
+                info!("✅ Marked filled on Mantle (solver {} paid): {}", solver_address, txid);
+
                 self.database
-                    .update_intent_status(&intent.id, IntentStatus::Completed)
+                    .update_intent_status(&intent.id, IntentStatus::SolverPaid)
                     .map_err(|e| anyhow!("Failed to update status: {}", e))?;
 
                 let mut metrics = self.metrics.write().await;
                 metrics.successful_bridges += 1;
+
+                Ok(())
             }
             Err(e) => {
-                error!(
-                    "❌ Failed to mark {} filled on Mantle: {}",
-                    token_info.token_type.symbol(),
-                    e
-                );
-                return Err(anyhow!("Mark filled failed: {}", e));
+                error!("❌ Failed to mark filled on Mantle: {}", e);
+                Err(anyhow!("Mark filled failed: {}", e))
             }
         }
-
-        Ok(())
     }
 
-    async fn handle_refund(&self, intent: &Intent, token_info: &TokenBridgeInfo) -> Result<()> {
-        let direction = self.determine_bridge_direction(intent);
+    // ============================================================================
+    // REFUND HANDLING
+    // ============================================================================
 
-        match direction {
-            BridgeDirection::EthereumToMantle => {
+    pub async fn handle_refund(&self, intent: &Intent) -> Result<()> {
+        info!(
+            "♻️ Processing refund for intent {} on {}",
+            intent.id, intent.source_chain
+        );
+
+        match intent.source_chain.as_str() {
+            "ethereum" => {
                 self.ethereum_relayer
                     .refund_intent(&intent.id)
                     .await
                     .map_err(|e| anyhow!("Ethereum refund failed: {}", e))?;
             }
-            BridgeDirection::MantleToEthereum => {
+            "mantle" => {
                 self.mantle_relayer
                     .refund_intent(&intent.id)
                     .await
                     .map_err(|e| anyhow!("Mantle refund failed: {}", e))?;
             }
-            BridgeDirection::Unknown => {}
+            _ => return Err(anyhow!("Unsupported source chain: {}", intent.source_chain)),
         }
 
         self.database
@@ -706,21 +636,13 @@ impl BridgeCoordinator {
         let mut metrics = self.metrics.write().await;
         metrics.refunded_intents += 1;
 
-        info!(
-            "♻️ {} intent {} refunded",
-            token_info.token_type.symbol(),
-            intent.id
-        );
+        info!("♻️ Intent {} refunded", intent.id);
         Ok(())
     }
 
-    fn determine_bridge_direction(&self, intent: &Intent) -> BridgeDirection {
-        match intent.dest_chain.as_str() {
-            "mantle" => BridgeDirection::EthereumToMantle,
-            "ethereum" => BridgeDirection::MantleToEthereum,
-            _ => BridgeDirection::Unknown,
-        }
-    }
+    // ============================================================================
+    // HELPER METHODS
+    // ============================================================================
 
     async fn record_error(&self, error: String) {
         let mut metrics = self.metrics.write().await;
@@ -744,8 +666,8 @@ impl BridgeCoordinator {
         TokenType::from_address(token_address)
             .map(|token_type| {
                 let dest_address = match chain_id {
-                    1 => token_type.get_ethereum_address(),
-                    5000 => token_type.get_mantle_address(),
+                    11155111 => token_type.get_ethereum_address(),
+                    5003 => token_type.get_mantle_address(),
                     _ => return false,
                 };
                 dest_address != "0x0000000000000000000000000000000000000000"
