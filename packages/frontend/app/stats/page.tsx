@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import Navigation from "@/components/shared/Navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -17,7 +17,11 @@ import {
   Zap,
   ArrowUpRight,
   ArrowDownRight,
+  Loader2,
+  RefreshCw,
+  AlertCircle,
 } from "lucide-react"
+import { useBridgeStats, useHealthCheck, calculateSuccessRate, formatLargeNumber } from "@/hooks/useBridgeStats"
 import {
   LineChart,
   Line,
@@ -36,7 +40,45 @@ import {
 export default function StatsPage() {
   const [timePeriod, setTimePeriod] = useState("7d")
 
-  // Mock data for charts
+  // Fetch real bridge statistics
+  const {
+    totalIntents,
+    pendingIntents,
+    filledIntents,
+    completedIntents,
+    failedIntents,
+    refundedIntents,
+    ethereumToMantle,
+    mantleToEthereum,
+    volumeByToken,
+    isLoading: statsLoading,
+    error: statsError,
+    refetch: refetchStats,
+  } = useBridgeStats()
+
+  // Fetch health check data
+  const {
+    status: healthStatus,
+    components: healthComponents,
+    isLoading: healthLoading,
+    error: healthError,
+    refetch: refetchHealth,
+  } = useHealthCheck()
+
+  // Calculate derived metrics
+  const successRate = useMemo(() => {
+    return calculateSuccessRate(completedIntents, failedIntents);
+  }, [completedIntents, failedIntents])
+
+  // Calculate total volume (approximate sum)
+  const totalVolume = useMemo(() => {
+    return Object.values(volumeByToken).reduce((acc, val) => {
+      const numVal = parseFloat(val) || 0;
+      return acc + numVal;
+    }, 0);
+  }, [volumeByToken])
+
+  // Mock data for charts (will be replaced with real time-series data in future)
   const volumeData = [
     { date: "Dec 8", volume: 1200000 },
     { date: "Dec 9", volume: 1450000 },
@@ -54,13 +96,6 @@ export default function StatsPage() {
     { range: "30-40s", count: 85 },
     { range: "40-50s", count: 25 },
     { range: "50-60s", count: 12 },
-  ]
-
-  const assetDistribution = [
-    { name: "ETH", value: 45, color: "#f97316" },
-    { name: "USDT", value: 25, color: "#ec4899" },
-    { name: "USDC", value: 20, color: "#8b5cf6" },
-    { name: "MNT", value: 10, color: "#06b6d4" },
   ]
 
   const solverPerformance = [
@@ -98,50 +133,76 @@ export default function StatsPage() {
     },
   ]
 
-  const metrics = [
-    {
-      title: "Total Volume (24h)",
-      value: "$12.5M",
-      change: "+15.3%",
-      trend: "up",
-      icon: DollarSign,
-    },
-    {
-      title: "Total Transactions",
-      value: "45,231",
-      change: "+8.7%",
-      trend: "up",
-      icon: Activity,
-    },
-    {
-      title: "Average Bridge Time",
-      value: "18s",
-      change: "-12.5%",
-      trend: "up",
-      icon: Clock,
-    },
-    {
-      title: "Success Rate",
-      value: "99.4%",
-      change: "+0.3%",
-      trend: "up",
-      icon: CheckCircle2,
-    },
-    {
-      title: "Active Users",
-      value: "3,421",
-      change: "+22.1%",
-      trend: "up",
-      icon: Users,
-    },
-    {
-      title: "Active Solvers",
-      value: "47",
-      change: "+5",
-      trend: "up",
-      icon: Zap,
-    },
-  ]
+  // Calculate asset distribution from volume by token
+  const assetDistribution = useMemo(() => {
+    const colors = ["#f97316", "#ec4899", "#8b5cf6", "#06b6d4", "#10b981"];
+    return Object.entries(volumeByToken)
+      .map(([token, volume], index) => ({
+        name: token,
+        value: parseFloat(volume) || 0,
+        color: colors[index % colors.length],
+      }))
+      .filter((asset) => asset.value > 0);
+  }, [volumeByToken])
+
+  const metrics = useMemo(
+    () => [
+      {
+        title: "Total Transactions",
+        value: statsLoading ? "..." : formatLargeNumber(totalIntents),
+        change: statsLoading ? "" : `${completedIntents} completed`,
+        trend: "up",
+        icon: Activity,
+      },
+      {
+        title: "Completed",
+        value: statsLoading ? "..." : formatLargeNumber(completedIntents),
+        change: statsLoading ? "" : `${filledIntents} filled`,
+        trend: "up",
+        icon: CheckCircle2,
+      },
+      {
+        title: "Success Rate",
+        value: statsLoading ? "..." : `${successRate.toFixed(1)}%`,
+        change: statsLoading ? "" : `${failedIntents} failed`,
+        trend: "up",
+        icon: TrendingUp,
+      },
+      {
+        title: "Pending",
+        value: statsLoading ? "..." : formatLargeNumber(pendingIntents),
+        change: statsLoading ? "" : `${refundedIntents} refunded`,
+        trend: "up",
+        icon: Clock,
+      },
+      {
+        title: "ETH → Mantle",
+        value: statsLoading ? "..." : formatLargeNumber(ethereumToMantle),
+        change: statsLoading ? "" : "cross-chain",
+        trend: "up",
+        icon: ArrowDownRight,
+      },
+      {
+        title: "Mantle → ETH",
+        value: statsLoading ? "..." : formatLargeNumber(mantleToEthereum),
+        change: statsLoading ? "" : "cross-chain",
+        trend: "up",
+        icon: ArrowUpRight,
+      },
+    ],
+    [
+      statsLoading,
+      totalIntents,
+      completedIntents,
+      filledIntents,
+      successRate,
+      failedIntents,
+      pendingIntents,
+      refundedIntents,
+      ethereumToMantle,
+      mantleToEthereum,
+    ]
+  )
 
   return (
     <div className="min-h-screen bg-black">
@@ -157,16 +218,51 @@ export default function StatsPage() {
               <p className="text-neutral-400">Real-time metrics and performance data</p>
             </div>
 
-            {/* Time Period Selector */}
-            <Tabs value={timePeriod} onValueChange={setTimePeriod} className="w-full sm:w-auto">
-              <TabsList className="border border-neutral-800 bg-neutral-900">
-                <TabsTrigger value="24h">24H</TabsTrigger>
-                <TabsTrigger value="7d">7D</TabsTrigger>
-                <TabsTrigger value="30d">30D</TabsTrigger>
-                <TabsTrigger value="all">ALL</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <div className="flex gap-3">
+              <Button
+                onClick={() => {
+                  refetchStats()
+                  refetchHealth()
+                }}
+                disabled={statsLoading || healthLoading}
+                variant="outline"
+                className="border-neutral-700 bg-neutral-800 hover:bg-neutral-700"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${statsLoading || healthLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+
+              {/* Time Period Selector */}
+              <Tabs value={timePeriod} onValueChange={setTimePeriod} className="w-full sm:w-auto">
+                <TabsList className="border border-neutral-800 bg-neutral-900">
+                  <TabsTrigger value="24h">24H</TabsTrigger>
+                  <TabsTrigger value="7d">7D</TabsTrigger>
+                  <TabsTrigger value="30d">30D</TabsTrigger>
+                  <TabsTrigger value="all">ALL</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
           </div>
+
+          {/* Error States */}
+          {statsError && (
+            <div className="mb-6 flex items-center gap-3 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-red-500">
+              <AlertCircle className="h-5 w-5" />
+              <div>
+                <p className="font-medium">Error loading statistics</p>
+                <p className="text-sm text-red-400">{statsError}</p>
+              </div>
+            </div>
+          )}
+          {healthError && (
+            <div className="mb-6 flex items-center gap-3 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-4 text-yellow-500">
+              <AlertCircle className="h-5 w-5" />
+              <div>
+                <p className="font-medium">Error loading health status</p>
+                <p className="text-sm text-yellow-400">{healthError}</p>
+              </div>
+            </div>
+          )}
 
           {/* Key Metrics Grid */}
           <div className="mb-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -337,31 +433,61 @@ export default function StatsPage() {
           <Card className="border-neutral-800 bg-neutral-900">
             <CardHeader>
               <CardTitle className="text-white">Network Health</CardTitle>
-              <CardDescription className="text-neutral-400">Real-time system status</CardDescription>
+              <CardDescription className="text-neutral-400">
+                Real-time system status
+                {healthLoading && (
+                  <span className="ml-2 inline-flex items-center gap-1 text-xs text-neutral-500">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading...
+                  </span>
+                )}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {[
-                  { name: "Mantle RPC", status: "operational", latency: "45ms" },
-                  { name: "Ethereum RPC", status: "operational", latency: "82ms" },
-                  { name: "Relayer", status: "operational", uptime: "99.98%" },
-                  { name: "Solver Network", status: "operational", active: "47" },
-                ].map((service, index) => (
+                {Object.entries(healthComponents).map(([component, status], index) => (
                   <div key={index} className="flex items-center justify-between rounded-lg bg-neutral-800/50 p-4">
                     <div>
-                      <div className="mb-1 font-medium text-white">{service.name}</div>
+                      <div className="mb-1 font-medium capitalize text-white">{component.replace(/_/g, " ")}</div>
                       <div className="text-xs text-neutral-500">
-                        {service.latency || service.uptime || `${service.active} active`}
+                        {status === "healthy" ? "Operational" : status}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="h-2 w-2 animate-pulse rounded-full bg-green-500"></div>
-                      <Badge variant="outline" className="border-green-500/20 bg-green-500/10 text-green-500">
-                        {service.status}
+                      <div
+                        className={`h-2 w-2 animate-pulse rounded-full ${
+                          status === "healthy" ? "bg-green-500" : "bg-yellow-500"
+                        }`}
+                      ></div>
+                      <Badge
+                        variant="outline"
+                        className={
+                          status === "healthy"
+                            ? "border-green-500/20 bg-green-500/10 text-green-500"
+                            : "border-yellow-500/20 bg-yellow-500/10 text-yellow-500"
+                        }
+                      >
+                        {status}
                       </Badge>
                     </div>
                   </div>
                 ))}
+                {Object.keys(healthComponents).length === 0 && !healthLoading && (
+                  <div className="col-span-full py-8 text-center text-neutral-500">
+                    No health data available
+                  </div>
+                )}
+              </div>
+              <div className="mt-4 flex items-center justify-between border-t border-neutral-800 pt-4">
+                <div className="text-sm text-neutral-500">
+                  Overall Status:{" "}
+                  <span
+                    className={`font-medium ${healthStatus === "healthy" ? "text-green-500" : "text-yellow-500"}`}
+                  >
+                    {healthStatus || "Unknown"}
+                  </span>
+                </div>
+                <div className="text-xs text-neutral-600">Auto-refresh every 15s</div>
               </div>
             </CardContent>
           </Card>

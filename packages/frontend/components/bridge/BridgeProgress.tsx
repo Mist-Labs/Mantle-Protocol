@@ -5,7 +5,22 @@ import { motion } from "framer-motion"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { CheckCircle2, Loader2, ExternalLink, ArrowRight, Shield, Network, Clock } from "lucide-react"
+import {
+  CheckCircle2,
+  Loader2,
+  ExternalLink,
+  ArrowRight,
+  Shield,
+  Network,
+  Clock,
+  FileSignature,
+  CheckSquare,
+  XCircle,
+} from "lucide-react"
+import type { Hex } from "viem"
+import type { BridgeStep } from "@/hooks/useBridge"
+import type { IntentStatus } from "@/lib/api"
+import { getTxUrl, getChainType } from "@/lib/contracts"
 
 interface BridgeProgressProps {
   onClose: () => void
@@ -13,41 +28,119 @@ interface BridgeProgressProps {
   toNetwork: string
   amount: string
   token: string
+  step: BridgeStep
+  intentId?: Hex
+  txHash?: Hex
+  status?: IntentStatus
+  error?: string
 }
 
-const STEPS = [
-  { id: 0, title: "Creating Intent", description: "Generating privacy commitment...", icon: Shield },
-  { id: 1, title: "Waiting for Solver", description: "Solvers competing for best rate...", icon: Network },
-  { id: 2, title: "Solver Filled", description: "Liquidity provided on destination...", icon: CheckCircle2 },
-  { id: 3, title: "Auto-Claiming", description: "Sending funds to your wallet...", icon: Clock },
-  { id: 4, title: "Complete", description: "Bridge successful!", icon: CheckCircle2 },
+// Map bridge steps to UI display
+const STEP_MAP: Record<
+  BridgeStep,
+  {
+    title: string
+    description: string
+    icon: typeof Shield
+  }
+> = {
+  idle: {
+    title: "Ready",
+    description: "Click Bridge Now to start",
+    icon: Shield,
+  },
+  "generating-params": {
+    title: "Generating Privacy Params",
+    description: "Creating commitment and secrets...",
+    icon: Shield,
+  },
+  "signing-auth": {
+    title: "Sign Authorization",
+    description: "Sign to authorize auto-claim...",
+    icon: FileSignature,
+  },
+  "approving-token": {
+    title: "Approving Token",
+    description: "Approving token for bridge contract...",
+    icon: CheckSquare,
+  },
+  "creating-intent": {
+    title: "Creating Intent",
+    description: "Submitting intent on-chain...",
+    icon: Network,
+  },
+  "submitting-backend": {
+    title: "Notifying Backend",
+    description: "Registering with relayer...",
+    icon: Network,
+  },
+  "waiting-solver": {
+    title: "Waiting for Solver",
+    description: "Solvers competing for best rate...",
+    icon: Loader2,
+  },
+  completed: {
+    title: "Complete",
+    description: "Bridge successful!",
+    icon: CheckCircle2,
+  },
+  failed: {
+    title: "Failed",
+    description: "Transaction failed",
+    icon: XCircle,
+  },
+}
+
+// Steps to display in order
+const DISPLAY_STEPS: BridgeStep[] = [
+  "generating-params",
+  "signing-auth",
+  "creating-intent",
+  "waiting-solver",
+  "completed",
 ]
 
-export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount, token }: BridgeProgressProps) {
-  const [currentStep, setCurrentStep] = useState(0)
-  const [txHash, setTxHash] = useState("0x1234...5678")
+export default function BridgeProgress({
+  onClose,
+  fromNetwork,
+  toNetwork,
+  amount,
+  token,
+  step,
+  intentId,
+  txHash,
+  status,
+  error,
+}: BridgeProgressProps) {
+  const isComplete = step === "completed"
+  const isFailed = step === "failed"
 
-  // Simulate progress
-  useEffect(() => {
-    const timers = [
-      setTimeout(() => setCurrentStep(1), 2000),
-      setTimeout(() => setCurrentStep(2), 5000),
-      setTimeout(() => setCurrentStep(3), 8000),
-      setTimeout(() => setCurrentStep(4), 11000),
-    ]
+  // Calculate progress
+  const currentStepIndex = DISPLAY_STEPS.indexOf(step)
+  const progress =
+    currentStepIndex >= 0
+      ? ((currentStepIndex + 1) / DISPLAY_STEPS.length) * 100
+      : 0
 
-    return () => timers.forEach(clearTimeout)
-  }, [])
+  // Get explorer URL for tx hash
+  const getExplorerUrl = () => {
+    if (!txHash) return null
 
-  const isComplete = currentStep === 4
-  const progress = ((currentStep + 1) / STEPS.length) * 100
+    // Determine which chain the tx is on (source chain for creation)
+    const chainType = getChainType(fromNetwork.includes("Ethereum") ? 11155111 : 5003)
+    if (!chainType) return null
+
+    return getTxUrl(chainType, txHash)
+  }
+
+  const explorerUrl = getExplorerUrl()
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-md border border-neutral-800 bg-neutral-900 text-white">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold">
-            {isComplete ? "Bridge Complete!" : "Processing Bridge..."}
+            {isComplete ? "Bridge Complete!" : isFailed ? "Bridge Failed" : "Processing Bridge..."}
           </DialogTitle>
         </DialogHeader>
 
@@ -56,7 +149,11 @@ export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount
           <div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800">
               <motion.div
-                className="h-full bg-gradient-to-r from-orange-500 to-pink-500"
+                className={`h-full ${
+                  isFailed
+                    ? "bg-gradient-to-r from-red-500 to-orange-500"
+                    : "bg-gradient-to-r from-orange-500 to-pink-500"
+                }`}
                 initial={{ width: 0 }}
                 animate={{ width: `${progress}%` }}
                 transition={{ duration: 0.5 }}
@@ -64,7 +161,7 @@ export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount
             </div>
             <div className="mt-2 flex justify-between text-xs text-neutral-500">
               <span>
-                Step {currentStep + 1} of {STEPS.length}
+                Step {Math.max(currentStepIndex + 1, 1)} of {DISPLAY_STEPS.length}
               </span>
               <span>{Math.round(progress)}%</span>
             </div>
@@ -93,22 +190,55 @@ export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount
                 {amount} {token}
               </span>
             </div>
+            {status && (
+              <div className="flex items-center justify-between border-t border-neutral-700 pt-3">
+                <span className="text-sm text-neutral-400">Status</span>
+                <Badge
+                  variant="outline"
+                  className={`border-neutral-700 ${
+                    status === "completed"
+                      ? "bg-green-500/10 text-green-500"
+                      : status === "failed"
+                        ? "bg-red-500/10 text-red-500"
+                        : "bg-orange-500/10 text-orange-500"
+                  }`}
+                >
+                  {status}
+                </Badge>
+              </div>
+            )}
           </div>
+
+          {/* Error Message */}
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-lg border border-red-500/30 bg-red-500/10 p-4"
+            >
+              <div className="mb-1 flex items-center gap-2 text-sm font-medium text-red-500">
+                <XCircle className="h-4 w-4" />
+                Error
+              </div>
+              <div className="text-xs text-neutral-300">{error}</div>
+            </motion.div>
+          )}
 
           {/* Steps */}
           <div className="space-y-3">
-            {STEPS.map((step) => {
-              const Icon = step.icon
-              const isActive = step.id === currentStep
-              const isCompleted = step.id < currentStep
-              const isPending = step.id > currentStep
+            {DISPLAY_STEPS.map((displayStep, index) => {
+              const stepInfo = STEP_MAP[displayStep]
+              const Icon = stepInfo.icon
+              const isActive = step === displayStep
+              const isCompleted = currentStepIndex > index
+              const isPending = currentStepIndex < index
 
               return (
                 <motion.div
-                  key={step.id}
+                  key={displayStep}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: step.id * 0.1 }}
+                  transition={{ delay: index * 0.1 }}
                   className={`flex items-center gap-4 rounded-lg p-3 transition-all ${
                     isActive
                       ? "border border-orange-500/30 bg-orange-500/10"
@@ -136,9 +266,9 @@ export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount
                         isActive ? "text-orange-500" : isCompleted ? "text-green-500" : "text-neutral-400"
                       }`}
                     >
-                      {step.title}
+                      {stepInfo.title}
                     </div>
-                    <div className="text-xs text-neutral-500">{step.description}</div>
+                    <div className="text-xs text-neutral-500">{stepInfo.description}</div>
                   </div>
                 </motion.div>
               )
@@ -146,7 +276,7 @@ export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount
           </div>
 
           {/* Transaction Hash */}
-          {currentStep >= 2 && (
+          {txHash && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -155,9 +285,30 @@ export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount
               <div className="mb-1 text-xs text-neutral-400">Transaction Hash</div>
               <div className="flex items-center gap-2">
                 <span className="flex-1 truncate font-mono text-sm text-white">{txHash}</span>
-                <button className="text-orange-500 transition-colors hover:text-orange-400">
-                  <ExternalLink className="h-4 w-4" />
-                </button>
+                {explorerUrl && (
+                  <a
+                    href={explorerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-orange-500 transition-colors hover:text-orange-400"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Intent ID */}
+          {intentId && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-lg border border-neutral-700 bg-neutral-800/50 p-3"
+            >
+              <div className="mb-1 text-xs text-neutral-400">Intent ID</div>
+              <div className="flex items-center gap-2">
+                <span className="flex-1 truncate font-mono text-sm text-white">{intentId}</span>
               </div>
             </motion.div>
           )}
@@ -173,12 +324,20 @@ export default function BridgeProgress({ onClose, fromNetwork, toNetwork, amount
                   variant="outline"
                   className="flex-1 border-neutral-700 bg-neutral-800 hover:bg-neutral-700"
                   onClick={() => {
-                    // Navigate to activity
+                    window.location.href = "/activity"
                   }}
                 >
                   View Activity
                 </Button>
               </>
+            ) : isFailed ? (
+              <Button
+                variant="outline"
+                className="w-full border-neutral-700 bg-neutral-800 hover:bg-neutral-700"
+                onClick={onClose}
+              >
+                Close
+              </Button>
             ) : (
               <div className="w-full text-center text-sm text-neutral-500">
                 Please wait... This usually takes 10-30 seconds
