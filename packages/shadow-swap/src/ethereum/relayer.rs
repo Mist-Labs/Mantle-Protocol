@@ -22,7 +22,7 @@ pub mod ethereum_contracts {
         EthIntentPool,
         r#"[
             function createIntent(bytes32 intentId, bytes32 commitment, address token, uint256 amount, uint32 destChain, address refundTo, bytes32 secret, bytes32 nullifier) external
-            function markFilled(bytes32 intentId, bytes32[] calldata merkleProof, uint256 leafIndex) external
+            function markFilled(bytes32 intentId, address solver, bytes32[] calldata merkleProof, uint256 leafIndex) external
             function syncDestChainRoot(uint32 chainId, bytes32 root) external
             function refund(bytes32 intentId) external
             function generateCommitmentProof(bytes32 commitment) external view returns (bytes32[] memory, uint256)
@@ -328,6 +328,7 @@ impl EthereumRelayer {
     pub async fn execute_mark_filled(
         &self,
         intent_id: &str,
+        solver_address: &str,
         merkle_path: &[String],
         leaf_index: u32,
     ) -> Result<String> {
@@ -350,9 +351,13 @@ impl EthereumRelayer {
             })
             .collect::<Result<Vec<[u8; 32]>>>()?;
 
+        let solver_addr: Address = solver_address
+            .parse()
+            .map_err(|e| anyhow!("Invalid solver address: {}", e))?;
+
         let tx = self
             .intent_pool
-            .mark_filled(intent_id_bytes, proof, U256::from(leaf_index));
+            .mark_filled(intent_id_bytes, solver_addr, proof, U256::from(leaf_index)); // add secret
 
         let pending = tx
             .send()
@@ -769,6 +774,7 @@ impl ChainRelayer for EthereumRelayer {
     fn mark_filled(
         &self,
         intent_id: &str,
+        solver_address: &str,
         merkle_path: &[String],
         leaf_index: u32,
     ) -> impl std::future::Future<Output = Result<String>> + Send {
@@ -776,7 +782,7 @@ impl ChainRelayer for EthereumRelayer {
         let merkle_path = merkle_path.to_vec();
 
         async move {
-            self.execute_mark_filled(&intent_id, &merkle_path, leaf_index)
+            self.execute_mark_filled(&intent_id, &solver_address, &merkle_path, leaf_index)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }

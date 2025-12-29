@@ -166,7 +166,7 @@ contract IntegrationTest is Test {
         bytes32[] memory destProof = settlement.generateFillProof(intentId);
 
         vm.prank(solver);
-        intentPool.markFilled(intentId, destProof, 0);
+        intentPool.markFilled(intentId, solver, destProof, 0);
 
         // Verify solver received repayment on source chain
         uint256 poolFee = (TEST_AMOUNT * intentPool.FEE_BPS()) / 10000;
@@ -678,7 +678,7 @@ contract IntegrationTest is Test {
 
         vm.prank(solver);
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver, proof, 0);
     }
 
     // ========== STRESS TESTS ==========
@@ -780,7 +780,7 @@ contract IntegrationTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.expectRevert(PrivateIntentPool.RootNotSynced.selector);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver, proof, 0);
 
         vm.stopPrank();
 
@@ -818,12 +818,12 @@ contract IntegrationTest is Test {
 
         address solver1 = makeAddr("solver1");
         vm.prank(solver1);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver1, proof, 0);
 
         address solver2 = makeAddr("solver2");
         vm.prank(solver2);
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver2, proof, 0);
 
         assertEq(intentPool.getSolver(intentId), solver1);
     }
@@ -897,7 +897,7 @@ contract IntegrationTest is Test {
 
         gasStart = gasleft();
         vm.prank(solver);
-        intentPool.markFilled(intentId, fillProof, 0);
+        intentPool.markFilled(intentId, solver, fillProof, 0);
         console.log("Gas for markFilled:", gasStart - gasleft());
     }
 }

@@ -4,8 +4,11 @@ use serde_json::json;
 use sha2::Sha256;
 use tracing::{error, info, warn};
 
-use crate::{AppState, api::model::{IndexerEventRequest, IndexerEventResponse}, models::model::IntentStatus};
-
+use crate::{
+    AppState,
+    api::model::{IndexerEventRequest, IndexerEventResponse},
+    models::model::IntentStatus,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -108,7 +111,6 @@ pub fn validate_hmac(
     Ok(())
 }
 
-
 // ============================================================================
 // EVENT HANDLERS
 // ============================================================================
@@ -117,10 +119,7 @@ pub async fn handle_intent_created_event(
     app_state: &web::Data<AppState>,
     request: &IndexerEventRequest,
 ) -> HttpResponse {
-    info!(
-        "📝 Processing intent_created event on {}",
-        request.chain
-    );
+    info!("📝 Processing intent_created event on {}", request.chain);
 
     // Extract intent_id from event_data
     let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
@@ -135,7 +134,11 @@ pub async fn handle_intent_created_event(
     };
 
     // Extract commitment from event_data
-    let commitment = match request.event_data.get("commitment").and_then(|v| v.as_str()) {
+    let commitment = match request
+        .event_data
+        .get("commitment")
+        .and_then(|v| v.as_str())
+    {
         Some(c) => c,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
@@ -170,7 +173,7 @@ pub async fn handle_intent_created_event(
 
             // Add commitment to Merkle tree
             let chain_id = if request.chain == "ethereum" { 1 } else { 5000 };
-            
+
             match app_state
                 .merkle_manager
                 .append_commitment(commitment, chain_id)
@@ -264,19 +267,25 @@ pub async fn handle_intent_filled_event(
     );
 
     match app_state.database.get_intent_by_id(intent_id) {
-        Ok(Some(mut intent)) => {
-            // Update intent status
-            intent.dest_fill_txid = Some(request.transaction_hash.clone());
-            intent.status = IntentStatus::Filled;
-            intent.updated_at = chrono::Utc::now();
-
-            if let Err(e) = app_state.database.update_intent(&intent) {
-                error!("Failed to update intent {}: {}", intent_id, e);
+        Ok(Some(_intent)) => {
+            if let Err(e) = app_state.database.update_intent_with_solver(
+                intent_id,
+                solver,
+                IntentStatus::Filled,
+            ) {
+                error!("Failed to update intent with solver {}: {}", intent_id, e);
                 return HttpResponse::InternalServerError().json(IndexerEventResponse {
                     success: false,
                     message: "Failed to update intent".to_string(),
                     error: Some(e.to_string()),
                 });
+            }
+
+            if let Err(e) = app_state
+                .database
+                .update_dest_fill_txid(intent_id, &request.transaction_hash)
+            {
+                error!("Failed to update dest_fill_txid: {}", e);
             }
 
             // Record fill event
@@ -295,6 +304,80 @@ pub async fn handle_intent_filled_event(
             HttpResponse::Ok().json(IndexerEventResponse {
                 success: true,
                 message: format!("Intent {} filled on {}", intent_id, request.chain),
+                error: None,
+            })
+        }
+        Ok(None) => {
+            warn!("Intent {} not found", intent_id);
+            HttpResponse::NotFound().json(IndexerEventResponse {
+                success: false,
+                message: "Intent not found".to_string(),
+                error: None,
+            })
+        }
+        Err(e) => {
+            error!("Database error: {}", e);
+            HttpResponse::InternalServerError().json(IndexerEventResponse {
+                success: false,
+                message: "Database error".to_string(),
+                error: Some(e.to_string()),
+            })
+        }
+    }
+}
+
+pub async fn handle_intent_marked_filled_event(
+    app_state: &web::Data<AppState>,
+    request: &IndexerEventRequest,
+) -> HttpResponse {
+    info!(
+        "✅ Processing intent_marked_filled event on {}",
+        request.chain
+    );
+
+    let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => {
+            return HttpResponse::BadRequest().json(IndexerEventResponse {
+                success: false,
+                message: "Missing intentId in event_data".to_string(),
+                error: None,
+            });
+        }
+    };
+
+    match app_state.database.get_intent_by_id(intent_id) {
+        Ok(Some(mut intent)) => {
+            // Update to reflect solver was paid
+            intent.source_complete_txid = Some(request.transaction_hash.clone());
+            intent.status = IntentStatus::SolverPaid; // New status
+            intent.updated_at = chrono::Utc::now();
+
+            if let Err(e) = app_state.database.update_intent(&intent) {
+                error!("Failed to update intent {}: {}", intent_id, e);
+                return HttpResponse::InternalServerError().json(IndexerEventResponse {
+                    success: false,
+                    message: "Failed to update intent".to_string(),
+                    error: Some(e.to_string()),
+                });
+            }
+
+            // Record the mark filled event
+            if let Err(e) = app_state.database.record_intent_event(
+                intent_id,
+                "intent_marked_filled",
+                &request.chain,
+                &request.transaction_hash,
+                request.block_number,
+            ) {
+                error!("Failed to record mark filled event: {}", e);
+            }
+
+            info!("✅ Intent {} solver paid on source chain", intent_id);
+
+            HttpResponse::Ok().json(IndexerEventResponse {
+                success: true,
+                message: format!("Solver paid for intent {} on {}", intent_id, request.chain),
                 error: None,
             })
         }
@@ -441,9 +524,10 @@ pub async fn handle_withdrawal_claimed_event(
     }
 
     // Store nullifier usage to prevent double-spending
-    if let Err(e) = app_state
-        .database
-        .record_nullifier_usage(nullifier, intent_id, &request.transaction_hash)
+    if let Err(e) =
+        app_state
+            .database
+            .record_nullifier_usage(nullifier, intent_id, &request.transaction_hash)
     {
         error!("Failed to record nullifier usage: {}", e);
     }

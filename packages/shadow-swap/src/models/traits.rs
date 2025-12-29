@@ -31,6 +31,7 @@ pub trait ChainRelayer: Send + Sync {
     fn mark_filled(
         &self,
         intent_id: &str,
+        solver_address: &str,
         merkle_path: &[String],
         leaf_index: u32,
     ) -> impl std::future::Future<Output = Result<String>> + Send;

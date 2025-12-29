@@ -8,6 +8,7 @@ mod models;
 mod pricefeed;
 mod relay_coordinator;
 mod root_sync_coordinator;
+mod encryption;
 
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use crate::{
     merkle_manager::merkle_manager::MerkleTreeManager,
     models::model::BridgeConfig,
     pricefeed::pricefeed::PriceFeedManager,
-    relay_coordinator::model::{BridgeCoordinator, EthereumRelayer, MantleRelayer, SecretMonitor},
+    relay_coordinator::model::{BridgeCoordinator, EthereumRelayer, MantleRelayer},
     root_sync_coordinator::root_sync_coordinator::RootSyncCoordinator,
 };
 
@@ -34,7 +35,6 @@ pub struct AppState {
     pub bridge_coordinator: Arc<BridgeCoordinator>,
     pub merkle_manager: Arc<MerkleTreeManager>,
     pub price_feed: Arc<PriceFeedManager>,
-    pub secret_monitor: Arc<SecretMonitor>,
     pub root_sync_coordinator: Arc<RootSyncCoordinator>,
 }
 
@@ -88,13 +88,6 @@ async fn main() -> Result<()> {
         20,
     ));
 
-    info!("🔍 Initializing secret monitor");
-    let secret_monitor = Arc::new(SecretMonitor::new(
-        ethereum_relayer.clone(),
-        mantle_relayer.clone(),
-        database.clone(),
-    ));
-
     info!("🎯 Initializing bridge coordinator");
     let bridge_coordinator = Arc::new(BridgeCoordinator::new(
         ethereum_relayer.clone(),
@@ -119,7 +112,6 @@ async fn main() -> Result<()> {
         bridge_coordinator: bridge_coordinator.clone(),
         merkle_manager: merkle_manager.clone(),
         price_feed,
-        secret_monitor: secret_monitor.clone(),
         root_sync_coordinator: root_sync_coordinator.clone(),
     });
 
@@ -129,16 +121,6 @@ async fn main() -> Result<()> {
         async move {
             if let Err(e) = manager.start().await {
                 error!("❌ Merkle Tree Manager error: {}", e);
-            }
-        }
-    });
-
-    info!("🔍 Starting secret monitor service");
-    let monitor_handle = task::spawn({
-        let monitor = secret_monitor.clone();
-        async move {
-            if let Err(e) = monitor.start().await {
-                error!("❌ Secret monitor error: {}", e);
             }
         }
     });
@@ -195,7 +177,6 @@ async fn main() -> Result<()> {
 
     tokio::select! {
         result = server => error!("HTTP server stopped: {:?}", result),
-        _ = monitor_handle => error!("Secret monitor stopped unexpectedly"),
         _ = tree_manager_handle => error!("Merkle Tree Manager stopped unexpectedly"),
         _ = coordinator_handle => error!("Bridge coordinator stopped unexpectedly"),
         _ = root_sync_handle => error!("Root sync coordinator stopped unexpectedly"),

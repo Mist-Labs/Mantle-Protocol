@@ -89,12 +89,12 @@ async function setupPipelines() {
     contracts: [
       {
         address: process.env.MANTLE_INTENT_POOL_ADDRESS!,
-        events: ["IntentCreated", "IntentFilled", "IntentRefunded"],
+        events: ["IntentCreated", "IntentMarkedFilled", "IntentRefunded", "RootSynced"],
         startBlock: "latest",
       },
       {
         address: process.env.MANTLE_SETTLEMENT_ADDRESS!,
-        events: ["WithdrawalClaimed", "IntentRegistered", "RootSynced"],
+        events: ["WithdrawalClaimed", "IntentRegistered", "IntentFilled", "RootSynced"],
         startBlock: "latest",
       },
     ],
@@ -109,12 +109,12 @@ async function setupPipelines() {
     contracts: [
       {
         address: process.env.ETHEREUM_INTENT_POOL_ADDRESS!,
-        events: ["IntentCreated", "IntentFilled", "IntentRefunded"],
+        events: ["IntentCreated", "IntentMarkedFilled", "IntentRefunded", "RootSynced"],
         startBlock: "latest",
       },
       {
         address: process.env.ETHEREUM_SETTLEMENT_ADDRESS!,
-        events: ["WithdrawalClaimed", "IntentRegistered", "RootSynced"],
+        events: ["WithdrawalClaimed", "IntentRegistered", "IntentFilled", "RootSynced"],
         startBlock: "latest",
       },
     ],

@@ -10,7 +10,7 @@ use crate::{
     AppState,
     api::{
         helper::{
-            handle_intent_created_event, handle_intent_filled_event, handle_intent_refunded_event, handle_intent_registered_event, handle_root_synced_event, handle_withdrawal_claimed_event, validate_hmac
+            handle_intent_created_event, handle_intent_filled_event, handle_intent_marked_filled_event, handle_intent_refunded_event, handle_intent_registered_event, handle_root_synced_event, handle_withdrawal_claimed_event, validate_hmac
         },
         model::{
             AllPricesResponse, ConvertRequest, ConvertResponse, IndexerEventRequest,
@@ -24,7 +24,7 @@ use crate::{
 // ============================================================================
 // BRIDGE OPERATIONS
 // ============================================================================
-
+// secret and nullifier should be encrypted on frontend before sending to backend
 #[post("/bridge/initiate")]
 pub async fn initiate_bridge(
     req: HttpRequest,
@@ -35,6 +35,8 @@ pub async fn initiate_bridge(
     if let Err(response) = validate_hmac(&req, &body, &app_state) {
         return response;
     }
+
+    //encrypt secret here
 
     // Parse request body
     let request: InitiateBridgeRequest = match serde_json::from_slice(&body) {
@@ -62,7 +64,7 @@ pub async fn initiate_bridge(
         });
     }
 
-    if !request.secret.starts_with("0x") || request.secret.len() != 66 {
+    if !request.secret.starts_with("0x") {
         return HttpResponse::BadRequest().json(InitiateBridgeResponse {
             success: false,
             intent_id: String::new(),
@@ -72,7 +74,7 @@ pub async fn initiate_bridge(
         });
     }
 
-    if !request.nullifier.starts_with("0x") || request.nullifier.len() != 66 {
+    if !request.nullifier.starts_with("0x") {
         return HttpResponse::BadRequest().json(InitiateBridgeResponse {
             success: false,
             intent_id: String::new(),
@@ -161,6 +163,7 @@ pub async fn initiate_bridge(
         updated_at: Utc::now(),
         deadline,
         refund_address: Some(request.refund_address.clone()),
+        solver_address: None,
     };
 
     if let Err(e) = app_state.database.create_intent(&intent) {
@@ -322,6 +325,7 @@ pub async fn indexer_event(
         "intent_created" => handle_intent_created_event(&app_state, &request).await,
         "intent_filled" => handle_intent_filled_event(&app_state, &request).await,
         "intent_registered" => handle_intent_registered_event(&app_state, &request).await,
+        "intent_marked_filled" => handle_intent_marked_filled_event(&app_state, &request).await,
         "intent_refunded" => handle_intent_refunded_event(&app_state, &request).await,
         "withdrawal_claimed" => handle_withdrawal_claimed_event(&app_state, &request).await,
         "root_synced" => handle_root_synced_event(&app_state, &request).await,

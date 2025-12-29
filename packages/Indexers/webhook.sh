@@ -79,7 +79,8 @@ create_webhook() {
     echo -e "${GREEN}  ✓ ${name} created${NC}"
   else
     echo -e "${RED}  ✗ Failed to create ${name}${NC}"
-    echo -e "${YELLOW}  (webhook may already exist - continuing...)${NC}"
+    echo -e "${YELLOW}  (webhook may already exist or entity '${entity}' doesn't exist)${NC}"
+    echo -e "${YELLOW}  Run: goldsky subgraph webhook list-entities ${subgraph}${NC}"
   fi
   echo ""
 }
@@ -99,14 +100,14 @@ MANTLE_SUBGRAPH="shadowswap-mantle-mantle-sepolia/v2"
 echo -e "${YELLOW}IntentPool Events:${NC}"
 create_webhook "$MANTLE_SUBGRAPH" "mantle-intent-created" "intent_created"
 create_webhook "$MANTLE_SUBGRAPH" "mantle-intent-refunded" "intent_refunded"
-create_webhook "$MANTLE_SUBGRAPH" "mantle-pool-root-synced" "pool_root_synced"
+create_webhook "$MANTLE_SUBGRAPH" "mantle-intent-marked-filled" "intent_marked_filled"
+create_webhook "$MANTLE_SUBGRAPH" "mantle-root-synced" "root_synced"
 
 # Settlement Events
 echo -e "${YELLOW}Settlement Events:${NC}"
 create_webhook "$MANTLE_SUBGRAPH" "mantle-intent-registered" "intent_registered"
 create_webhook "$MANTLE_SUBGRAPH" "mantle-intent-filled" "intent_filled"
 create_webhook "$MANTLE_SUBGRAPH" "mantle-withdrawal-claimed" "withdrawal_claimed"
-create_webhook "$MANTLE_SUBGRAPH" "mantle-settlement-root-synced" "settlement_root_synced"
 
 ################################
 # Ethereum Sepolia Webhooks
@@ -123,14 +124,14 @@ ETH_SUBGRAPH="shadowswap-ethereum-sepolia/v2"
 echo -e "${YELLOW}IntentPool Events:${NC}"
 create_webhook "$ETH_SUBGRAPH" "ethereum-intent-created" "intent_created"
 create_webhook "$ETH_SUBGRAPH" "ethereum-intent-refunded" "intent_refunded"
-create_webhook "$ETH_SUBGRAPH" "ethereum-pool-root-synced" "pool_root_synced"
+create_webhook "$ETH_SUBGRAPH" "ethereum-intent-marked-filled" "intent_marked_filled"
+create_webhook "$ETH_SUBGRAPH" "ethereum-root-synced" "root_synced"
 
 # Settlement Events
 echo -e "${YELLOW}Settlement Events:${NC}"
 create_webhook "$ETH_SUBGRAPH" "ethereum-intent-registered" "intent_registered"
 create_webhook "$ETH_SUBGRAPH" "ethereum-intent-filled" "intent_filled"
 create_webhook "$ETH_SUBGRAPH" "ethereum-withdrawal-claimed" "withdrawal_claimed"
-create_webhook "$ETH_SUBGRAPH" "ethereum-settlement-root-synced" "settlement_root_synced"
 
 ################################
 # Done
@@ -141,10 +142,16 @@ echo -e "${GREEN}✅ Webhook setup completed!${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${BLUE}📋 Event Summary:${NC}"
-echo "  IntentPool: IntentCreated, IntentRefunded, RootSynced"
-echo "  Settlement: IntentRegistered, IntentFilled, WithdrawalClaimed, RootSynced"
+echo "  IntentPool: IntentCreated, IntentMarkedFilled, IntentRefunded, RootSynced"
+echo "  Settlement: IntentRegistered, IntentFilled, WithdrawalClaimed"
 echo ""
 echo -e "${BLUE}📝 Useful Commands:${NC}"
+echo ""
+echo "  List available entities (Mantle):"
+echo -e "    ${YELLOW}goldsky subgraph webhook list-entities ${MANTLE_SUBGRAPH}${NC}"
+echo ""
+echo "  List available entities (Ethereum):"
+echo -e "    ${YELLOW}goldsky subgraph webhook list-entities ${ETH_SUBGRAPH}${NC}"
 echo ""
 echo "  List Mantle webhooks:"
 echo -e "    ${YELLOW}goldsky subgraph webhook list ${MANTLE_SUBGRAPH}${NC}"
@@ -156,5 +163,8 @@ echo "  Delete a webhook:"
 echo -e "    ${YELLOW}goldsky subgraph webhook delete ${MANTLE_SUBGRAPH} --name <webhook-name>${NC}"
 echo ""
 echo "  Test webhook endpoint:"
-echo -e "    ${YELLOW}curl -X POST ${WEBHOOK_URL} -H 'Content-Type: application/json' -d '{\"test\":true}'${NC}"
+echo -e "    ${YELLOW}curl -X POST ${WEBHOOK_URL} \\${NC}"
+echo -e "    ${YELLOW}  -H 'Content-Type: application/json' \\${NC}"
+echo -e "    ${YELLOW}  -H 'goldsky-webhook-secret: ${GOLDSKY_WEBHOOK_SECRET}' \\${NC}"
+echo -e "    ${YELLOW}  -d '{\"test\":true}'${NC}"
 echo ""

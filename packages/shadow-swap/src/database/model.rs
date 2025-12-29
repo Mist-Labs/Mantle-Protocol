@@ -35,6 +35,7 @@ pub struct DbIntent {
     pub updated_at: DateTime<Utc>,
     pub deadline: i64,
     pub refund_address: Option<String>,
+    pub solver_address: Option<String>
 }
 
 #[derive(Insertable)]
@@ -57,6 +58,7 @@ pub struct NewIntent<'a> {
     pub updated_at: DateTime<Utc>,
     pub deadline: i64,
     pub refund_address: Option<&'a str>,
+    pub solver_address: Option<&'a str>,
 }
 
 // ==================== Intent Privacy Params ====================
@@ -298,7 +300,8 @@ impl IntentStatus {
             Self::Pending => "pending",
             Self::Committed => "committed",
             Self::Filled => "filled",
-            Self::Completed => "completed",
+            Self::UserClaimed => "user_claimed",
+            Self::SolverPaid => "solver_paid",
             Self::Refunded => "refunded",
             Self::Failed => "failed",
         }
@@ -307,8 +310,12 @@ impl IntentStatus {
     pub fn from_str(s: &str) -> Result<Self, Box<dyn std::error::Error>> {
         match s {
             "created" => Ok(Self::Created),
+            "registered" => Ok(Self::Registered),
+            "pending" => Ok(Self::Pending),
+            "committed" => Ok(Self::Committed),
             "filled" => Ok(Self::Filled),
-            "completed" => Ok(Self::Completed),
+            "user_claimed" => Ok(Self::UserClaimed),
+            "solver_paid" => Ok(Self::SolverPaid),
             "refunded" => Ok(Self::Refunded),
             "failed" => Ok(Self::Failed),
             _ => Err(format!("Invalid intent status: {}", s).into()),
@@ -336,6 +343,7 @@ impl From<DbIntent> for Intent {
             updated_at: db.updated_at,
             deadline: db.deadline as u64,
             refund_address: db.refund_address,
+            solver_address: db.solver_address,
         }
     }
 }
@@ -360,6 +368,7 @@ impl<'a> From<&'a Intent> for NewIntent<'a> {
             updated_at: intent.updated_at,
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
+            solver_address: intent.solver_address.as_deref(),
         }
     }
 }
