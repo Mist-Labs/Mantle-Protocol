@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
         mantle_relayer.clone(),
         ethereum_relayer.clone(),
         database.clone(),
-        20,
+        60,
     ));
 
     info!("🎯 Initializing bridge coordinator");
