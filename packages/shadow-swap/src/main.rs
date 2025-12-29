@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
         mantle_relayer.clone(),
         ethereum_relayer.clone(),
         database.clone(),
-        60,
+        180,
     ));
 
     info!("🎯 Initializing bridge coordinator");
@@ -101,7 +101,7 @@ async fn main() -> Result<()> {
         database.clone(),
         ethereum_relayer.clone(),
         mantle_relayer.clone(),
-        60,
+        180,
     ));
 
     let app_state = web::Data::new(AppState {

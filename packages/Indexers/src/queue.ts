@@ -1,16 +1,17 @@
 import { Queue, Worker } from "bullmq";
 import { config } from "./config";
-import { GoldskyWebhookPayload, RelayerEventPayload } from "./types";
+import { GoldskyWebhookPayload } from "./types";
 import {
   handleIntentCreated,
   handleIntentRegistered,
   handleIntentFilled,
+  handleIntentMarkedFilled,
   handleIntentRefunded,
   handleWithdrawalClaimed,
   handleRootSynced,
-  handleIntentMarkedFilled,
 } from "./handler";
-import { sendToRelayer } from "./relayer";
+import crypto from "crypto";
+import axios from "axios";
 
 const connection = {
   host: config.redis.host,
@@ -18,74 +19,118 @@ const connection = {
   password: config.redis.password,
 };
 
-export const eventQueue = new Queue("shadowswap-events", {
-  connection,
-  defaultJobOptions: {
-    attempts: 3,
-    backoff: {
-      type: "exponential",
-      delay: 2000,
-    },
+export const eventQueue = new Queue("goldsky-events", { connection });
+
+function generateHMACSignature(payload: any): {
+  signature: string;
+  timestamp: string;
+} {
+  const requestBody = JSON.stringify(payload);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const message = timestamp + requestBody;
+
+  const signature = crypto
+    .createHmac("sha256", config.hmacSecret)
+    .update(message)
+    .digest("hex");
+
+  return { signature, timestamp };
+}
+
+async function forwardToRelayer(payload: any): Promise<void> {
+  const { signature, timestamp } = generateHMACSignature(payload);
+
+  try {
+    const response = await axios.post(
+      `${config.relayerBaseUrl}/indexer/event`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-signature": signature,
+          "x-timestamp": timestamp,
+        },
+        timeout: 30000,
+      }
+    );
+
+    console.log(`✅ Forwarded to relayer: ${response.status}`);
+  } catch (error: any) {
+    console.error("❌ Failed to forward to relayer:", error.message);
+    throw error;
+  }
+}
+
+const worker = new Worker(
+  "goldsky-events",
+  async (job) => {
+    const { payload, idempotencyKey } = job.data as {
+      payload: GoldskyWebhookPayload;
+      idempotencyKey: string;
+    };
+
+    console.log(`⚙️  Processing: ${payload.entity} | ID: ${idempotencyKey}`);
+
+    try {
+      const entity = payload.entity;
+      let transformedPayload;
+
+      // Route to appropriate handler based on entity type
+      switch (entity) {
+        case "intent_created":
+          transformedPayload = await handleIntentCreated(payload);
+          break;
+        case "intent_registered":
+          transformedPayload = await handleIntentRegistered(payload);
+          break;
+        case "intent_filled":
+          transformedPayload = await handleIntentFilled(payload);
+          break;
+        case "intent_marked_filled":
+          transformedPayload = await handleIntentMarkedFilled(payload);
+          break;
+        case "intent_refunded":
+          transformedPayload = await handleIntentRefunded(payload);
+          break;
+        case "withdrawal_claimed":
+          transformedPayload = await handleWithdrawalClaimed(payload);
+          break;
+        case "root_synced":
+          transformedPayload = await handleRootSynced(payload);
+          break;
+        default:
+          console.warn(`⚠️  Unknown entity type: ${entity}`);
+          return;
+      }
+
+      // Forward to relayer
+      await forwardToRelayer(transformedPayload);
+
+      console.log(`✅ Completed: ${entity}`);
+    } catch (error) {
+      console.error(`❌ Processing failed:`, error);
+      throw error;
+    }
   },
+  {
+    connection,
+    concurrency: 5,
+    limiter: {
+      max: 10,
+      duration: 1000,
+    },
+  }
+);
+
+worker.on("completed", (job) => {
+  console.log(`✅ Job ${job.id} completed`);
+});
+
+worker.on("failed", (job, err) => {
+  console.error(`❌ Job ${job?.id} failed:`, err.message);
 });
 
 export async function initQueue() {
-  const worker = new Worker(
-    "shadowswap-events",
-    async (job) => {
-      const { payload, idempotencyKey } = job.data as {
-        payload: GoldskyWebhookPayload;
-        idempotencyKey: string;
-      };
-
-      console.log(`🔄 Processing: ${payload.event.name} (${idempotencyKey})`);
-
-      let relayerPayload: RelayerEventPayload;
-
-      switch (payload.event.name) {
-        case "IntentCreated":
-          relayerPayload = await handleIntentCreated(payload);
-          break;
-        case "IntentRegistered":
-          relayerPayload = await handleIntentRegistered(payload);
-          break;
-        case "IntentFilled":
-          relayerPayload = await handleIntentFilled(payload);
-          break;
-        case "IntentMarkedFilled":
-          relayerPayload = await handleIntentMarkedFilled(payload);
-          break;
-        case "IntentRefunded":
-          relayerPayload = await handleIntentRefunded(payload);
-          break;
-        case "WithdrawalClaimed":
-          relayerPayload = await handleWithdrawalClaimed(payload);
-          break;
-        case "RootSynced":
-          relayerPayload = await handleRootSynced(payload);
-          break;
-        default:
-          console.log(`⚠️  Unknown event: ${payload.event.name}`);
-          return { status: "ignored" };
-      }
-
-      await sendToRelayer(relayerPayload);
-
-      return { status: "success", idempotencyKey };
-    },
-    {
-      connection,
-      concurrency: 5,
-    }
-  );
-
-  worker.on("completed", (job) => {
-    console.log(`✅ Completed: ${job.id}`);
-  });
-
-  worker.on("failed", (job, err) => {
-    console.error(`❌ Failed: ${job?.id}`, err.message);
-  });
-
+  await eventQueue.waitUntilReady();
   console.log("✅ Queue initialized");
 }
