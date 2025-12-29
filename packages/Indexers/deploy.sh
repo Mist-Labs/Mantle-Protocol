@@ -2,6 +2,8 @@
 
 set -e
 
+source .env
+
 echo "🚀 Deploying Goldsky Subgraphs..."
 
 # Deploy Ethereum Sepolia
