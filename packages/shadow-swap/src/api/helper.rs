@@ -111,6 +111,19 @@ pub fn validate_hmac(
     Ok(())
 }
 
+fn extract_chain_id(event_data: &serde_json::Map<String, serde_json::Value>) -> Option<u32> {
+    event_data.get("chainId").and_then(|v| {
+        if let Some(num) = v.as_u64() {
+            return Some(num as u32);
+        }
+
+        if let Some(s) = v.as_str() {
+            return s.parse::<u32>().ok();
+        }
+        None
+    })
+}
+
 // ============================================================================
 // EVENT HANDLERS
 // ============================================================================
@@ -350,7 +363,7 @@ pub async fn handle_intent_marked_filled_event(
         Ok(Some(mut intent)) => {
             // Update to reflect solver was paid
             intent.source_complete_txid = Some(request.transaction_hash.clone());
-            intent.status = IntentStatus::SolverPaid; // New status
+            intent.status = IntentStatus::SolverPaid; 
             intent.updated_at = chrono::Utc::now();
 
             if let Err(e) = app_state.database.update_intent(&intent) {
@@ -547,8 +560,19 @@ pub async fn handle_root_synced_event(
 ) -> HttpResponse {
     info!("🌳 Processing root_synced event on {}", request.chain);
 
-    // Extract root from event_data
-    let root = match request.event_data.get("root").and_then(|v| v.as_str()) {
+    // First, ensure event_data is an object/map
+    let event_map = match request.event_data.as_object() {
+        Some(map) => map,
+        None => {
+            return HttpResponse::BadRequest().json(IndexerEventResponse {
+                success: false,
+                message: "event_data is not a valid object".to_string(),
+                error: None,
+            });
+        }
+    };
+
+    let root = match event_map.get("root").and_then(|v| v.as_str()) {
         Some(r) => r,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
@@ -559,14 +583,17 @@ pub async fn handle_root_synced_event(
         }
     };
 
-    // Extract chainId from event_data
-    let chain_id = match request.event_data.get("chainId").and_then(|v| v.as_u64()) {
-        Some(id) => id as u32,
+    let chain_id = match extract_chain_id(event_map) {
+        Some(id) => id,
         None => {
+            error!(
+                "Missing or invalid chainId in event_data: {:?}",
+                request.event_data
+            );
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing chainId in event_data".to_string(),
-                error: None,
+                message: "Missing or invalid chainId in event_data".to_string(),
+                error: Some(format!("Received event_data: {:?}", request.event_data)),
             });
         }
     };
@@ -578,7 +605,6 @@ pub async fn handle_root_synced_event(
         request.chain
     );
 
-    // Record root sync in database
     if let Err(e) = app_state.database.record_root_sync(
         &format!("{}_{}", request.chain, chain_id),
         root,
@@ -601,7 +627,6 @@ pub async fn handle_root_synced_event(
     })
 }
 
-// New handler for intent_registered event (from PrivateSettlement)
 pub async fn handle_intent_registered_event(
     app_state: &web::Data<AppState>,
     request: &IndexerEventRequest,
