@@ -4,8 +4,11 @@ use serde_json::json;
 use sha2::Sha256;
 use tracing::{error, info, warn};
 
-use crate::{AppState, api::model::{IndexerEventRequest, IndexerEventResponse}, models::model::IntentStatus};
-
+use crate::{
+    AppState,
+    api::model::{IndexerEventRequest, IndexerEventResponse},
+    models::model::IntentStatus,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -108,6 +111,18 @@ pub fn validate_hmac(
     Ok(())
 }
 
+fn extract_chain_id(event_data: &serde_json::Map<String, serde_json::Value>) -> Option<u32> {
+    event_data.get("chainId").and_then(|v| {
+        if let Some(num) = v.as_u64() {
+            return Some(num as u32);
+        }
+
+        if let Some(s) = v.as_str() {
+            return s.parse::<u32>().ok();
+        }
+        None
+    })
+}
 
 // ============================================================================
 // EVENT HANDLERS
@@ -117,28 +132,31 @@ pub async fn handle_intent_created_event(
     app_state: &web::Data<AppState>,
     request: &IndexerEventRequest,
 ) -> HttpResponse {
-    info!(
-        "📝 Processing intent_created event on {}",
-        request.chain
-    );
+    info!("📝 Processing intent_created event on {}", request.chain);
 
-    let intent_id = match &request.intent_id {
+    // Extract intent_id from event_data
+    let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing intent_id".to_string(),
+                message: "Missing intentId in event_data".to_string(),
                 error: None,
             });
         }
     };
 
-    let commitment = match &request.commitment {
+    // Extract commitment from event_data
+    let commitment = match request
+        .event_data
+        .get("commitment")
+        .and_then(|v| v.as_str())
+    {
         Some(c) => c,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing commitment".to_string(),
+                message: "Missing commitment in event_data".to_string(),
                 error: None,
             });
         }
@@ -147,14 +165,13 @@ pub async fn handle_intent_created_event(
     info!(
         "🔐 Intent created: {} | Commitment: {}",
         intent_id,
-        &commitment[..16]
+        &commitment[..commitment.len().min(16)]
     );
-
 
     match app_state.database.get_intent_by_id(intent_id) {
         Ok(Some(mut intent)) => {
             // Update intent with on-chain confirmation
-            intent.source_commitment = Some(commitment.clone());
+            intent.source_commitment = Some(commitment.to_string());
             intent.status = IntentStatus::Committed;
             intent.updated_at = chrono::Utc::now();
 
@@ -169,7 +186,7 @@ pub async fn handle_intent_created_event(
 
             // Add commitment to Merkle tree
             let chain_id = if request.chain == "ethereum" { 1 } else { 5000 };
-            
+
             match app_state
                 .merkle_manager
                 .append_commitment(commitment, chain_id)
@@ -187,7 +204,7 @@ pub async fn handle_intent_created_event(
                         "intent_created",
                         &request.chain,
                         &request.transaction_hash,
-                        request.block_number.unwrap_or(0),
+                        request.block_number,
                     ) {
                         error!("Failed to record event: {}", e);
                     }
@@ -233,23 +250,25 @@ pub async fn handle_intent_filled_event(
 ) -> HttpResponse {
     info!("✅ Processing intent_filled event on {}", request.chain);
 
-    let intent_id = match &request.intent_id {
+    // Extract intent_id from event_data
+    let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing intent_id".to_string(),
+                message: "Missing intentId in event_data".to_string(),
                 error: None,
             });
         }
     };
 
-    let solver = match &request.solver {
+    // Extract solver from event_data
+    let solver = match request.event_data.get("solver").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing solver address".to_string(),
+                message: "Missing solver in event_data".to_string(),
                 error: None,
             });
         }
@@ -261,19 +280,25 @@ pub async fn handle_intent_filled_event(
     );
 
     match app_state.database.get_intent_by_id(intent_id) {
-        Ok(Some(mut intent)) => {
-            // Update intent status
-            intent.dest_fill_txid = Some(request.transaction_hash.clone());
-            intent.status = IntentStatus::Filled;
-            intent.updated_at = chrono::Utc::now();
-
-            if let Err(e) = app_state.database.update_intent(&intent) {
-                error!("Failed to update intent {}: {}", intent_id, e);
+        Ok(Some(_intent)) => {
+            if let Err(e) = app_state.database.update_intent_with_solver(
+                intent_id,
+                solver,
+                IntentStatus::Filled,
+            ) {
+                error!("Failed to update intent with solver {}: {}", intent_id, e);
                 return HttpResponse::InternalServerError().json(IndexerEventResponse {
                     success: false,
                     message: "Failed to update intent".to_string(),
                     error: Some(e.to_string()),
                 });
+            }
+
+            if let Err(e) = app_state
+                .database
+                .update_dest_fill_txid(intent_id, &request.transaction_hash)
+            {
+                error!("Failed to update dest_fill_txid: {}", e);
             }
 
             // Record fill event
@@ -282,7 +307,7 @@ pub async fn handle_intent_filled_event(
                 "intent_filled",
                 &request.chain,
                 &request.transaction_hash,
-                request.block_number.unwrap_or(0),
+                request.block_number,
             ) {
                 error!("Failed to record fill event: {}", e);
             }
@@ -314,33 +339,31 @@ pub async fn handle_intent_filled_event(
     }
 }
 
-pub async fn handle_intent_completed_event(
+pub async fn handle_intent_marked_filled_event(
     app_state: &web::Data<AppState>,
     request: &IndexerEventRequest,
 ) -> HttpResponse {
     info!(
-        "🎉 Processing intent_completed event on {}",
+        "✅ Processing intent_marked_filled event on {}",
         request.chain
     );
 
-    let intent_id = match &request.intent_id {
+    let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing intent_id".to_string(),
+                message: "Missing intentId in event_data".to_string(),
                 error: None,
             });
         }
     };
 
-    info!("🏁 Intent completed: {}", intent_id);
-
     match app_state.database.get_intent_by_id(intent_id) {
         Ok(Some(mut intent)) => {
-            // Update intent status
+            // Update to reflect solver was paid
             intent.source_complete_txid = Some(request.transaction_hash.clone());
-            intent.status = IntentStatus::Completed;
+            intent.status = IntentStatus::SolverPaid; 
             intent.updated_at = chrono::Utc::now();
 
             if let Err(e) = app_state.database.update_intent(&intent) {
@@ -352,26 +375,22 @@ pub async fn handle_intent_completed_event(
                 });
             }
 
-            // Record completion event
+            // Record the mark filled event
             if let Err(e) = app_state.database.record_intent_event(
                 intent_id,
-                "intent_completed",
+                "intent_marked_filled",
                 &request.chain,
                 &request.transaction_hash,
-                request.block_number.unwrap_or(0),
+                request.block_number,
             ) {
-                error!("Failed to record completion event: {}", e);
+                error!("Failed to record mark filled event: {}", e);
             }
 
-            // Update metrics
-            let mut metrics = app_state.bridge_coordinator.metrics.write().await;
-            metrics.successful_bridges += 1;
-
-            info!("✅ Intent {} marked as completed", intent_id);
+            info!("✅ Intent {} solver paid on source chain", intent_id);
 
             HttpResponse::Ok().json(IndexerEventResponse {
                 success: true,
-                message: format!("Intent {} completed successfully", intent_id),
+                message: format!("Solver paid for intent {} on {}", intent_id, request.chain),
                 error: None,
             })
         }
@@ -400,12 +419,13 @@ pub async fn handle_intent_refunded_event(
 ) -> HttpResponse {
     info!("♻️ Processing intent_refunded event on {}", request.chain);
 
-    let intent_id = match &request.intent_id {
+    // Extract intent_id from event_data
+    let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing intent_id".to_string(),
+                message: "Missing intentId in event_data".to_string(),
                 error: None,
             });
         }
@@ -434,7 +454,7 @@ pub async fn handle_intent_refunded_event(
                 "intent_refunded",
                 &request.chain,
                 &request.transaction_hash,
-                request.block_number.unwrap_or(0),
+                request.block_number,
             ) {
                 error!("Failed to record refund event: {}", e);
             }
@@ -475,23 +495,25 @@ pub async fn handle_withdrawal_claimed_event(
         request.chain
     );
 
-    let intent_id = match &request.intent_id {
+    // Extract intent_id from event_data
+    let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing intent_id".to_string(),
+                message: "Missing intentId in event_data".to_string(),
                 error: None,
             });
         }
     };
 
-    let nullifier = match &request.nullifier {
+    // Extract nullifier from event_data
+    let nullifier = match request.event_data.get("nullifier").and_then(|v| v.as_str()) {
         Some(n) => n,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing nullifier".to_string(),
+                message: "Missing nullifier in event_data".to_string(),
                 error: None,
             });
         }
@@ -500,7 +522,7 @@ pub async fn handle_withdrawal_claimed_event(
     info!(
         "💸 Withdrawal claimed: {} | Nullifier: {}",
         intent_id,
-        &nullifier[..16]
+        &nullifier[..nullifier.len().min(16)]
     );
 
     // Record withdrawal event
@@ -509,15 +531,16 @@ pub async fn handle_withdrawal_claimed_event(
         "withdrawal_claimed",
         &request.chain,
         &request.transaction_hash,
-        request.block_number.unwrap_or(0),
+        request.block_number,
     ) {
         error!("Failed to record withdrawal event: {}", e);
     }
 
     // Store nullifier usage to prevent double-spending
-    if let Err(e) = app_state
-        .database
-        .record_nullifier_usage(nullifier, intent_id, &request.transaction_hash)
+    if let Err(e) =
+        app_state
+            .database
+            .record_nullifier_usage(nullifier, intent_id, &request.transaction_hash)
     {
         error!("Failed to record nullifier usage: {}", e);
     }
@@ -537,36 +560,51 @@ pub async fn handle_root_synced_event(
 ) -> HttpResponse {
     info!("🌳 Processing root_synced event on {}", request.chain);
 
-    let root = match &request.root {
-        Some(r) => r,
+    // First, ensure event_data is an object/map
+    let event_map = match request.event_data.as_object() {
+        Some(map) => map,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing root".to_string(),
+                message: "event_data is not a valid object".to_string(),
                 error: None,
             });
         }
     };
 
-    let chain_id = match &request.dest_chain_id {
-        Some(id) => *id,
+    let root = match event_map.get("root").and_then(|v| v.as_str()) {
+        Some(r) => r,
         None => {
             return HttpResponse::BadRequest().json(IndexerEventResponse {
                 success: false,
-                message: "Missing dest_chain_id".to_string(),
+                message: "Missing root in event_data".to_string(),
                 error: None,
+            });
+        }
+    };
+
+    let chain_id = match extract_chain_id(event_map) {
+        Some(id) => id,
+        None => {
+            error!(
+                "Missing or invalid chainId in event_data: {:?}",
+                request.event_data
+            );
+            return HttpResponse::BadRequest().json(IndexerEventResponse {
+                success: false,
+                message: "Missing or invalid chainId in event_data".to_string(),
+                error: Some(format!("Received event_data: {:?}", request.event_data)),
             });
         }
     };
 
     info!(
         "🌳 Root synced: {} for chain {} on {}",
-        &root[..16],
+        &root[..root.len().min(16)],
         chain_id,
         request.chain
     );
 
-    // Record root sync in database
     if let Err(e) = app_state.database.record_root_sync(
         &format!("{}_{}", request.chain, chain_id),
         root,
@@ -587,4 +625,78 @@ pub async fn handle_root_synced_event(
         message: "Root sync recorded".to_string(),
         error: None,
     })
+}
+
+pub async fn handle_intent_registered_event(
+    app_state: &web::Data<AppState>,
+    request: &IndexerEventRequest,
+) -> HttpResponse {
+    info!("📋 Processing intent_registered event on {}", request.chain);
+
+    // Extract intent_id from event_data
+    let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => {
+            return HttpResponse::BadRequest().json(IndexerEventResponse {
+                success: false,
+                message: "Missing intentId in event_data".to_string(),
+                error: None,
+            });
+        }
+    };
+
+    info!("📋 Intent registered on destination: {}", intent_id);
+
+    match app_state.database.get_intent_by_id(intent_id) {
+        Ok(Some(mut intent)) => {
+            // Update intent with destination registration
+            intent.dest_registration_txid = Some(request.transaction_hash.clone());
+            intent.status = IntentStatus::Registered;
+            intent.updated_at = chrono::Utc::now();
+
+            if let Err(e) = app_state.database.update_intent(&intent) {
+                error!("Failed to update intent {}: {}", intent_id, e);
+                return HttpResponse::InternalServerError().json(IndexerEventResponse {
+                    success: false,
+                    message: "Failed to update intent".to_string(),
+                    error: Some(e.to_string()),
+                });
+            }
+
+            // Record registration event
+            if let Err(e) = app_state.database.record_intent_event(
+                intent_id,
+                "intent_registered",
+                &request.chain,
+                &request.transaction_hash,
+                request.block_number,
+            ) {
+                error!("Failed to record registration event: {}", e);
+            }
+
+            info!("✅ Intent {} marked as registered", intent_id);
+
+            HttpResponse::Ok().json(IndexerEventResponse {
+                success: true,
+                message: format!("Intent {} registered on {}", intent_id, request.chain),
+                error: None,
+            })
+        }
+        Ok(None) => {
+            warn!("Intent {} not found", intent_id);
+            HttpResponse::NotFound().json(IndexerEventResponse {
+                success: false,
+                message: "Intent not found".to_string(),
+                error: None,
+            })
+        }
+        Err(e) => {
+            error!("Database error: {}", e);
+            HttpResponse::InternalServerError().json(IndexerEventResponse {
+                success: false,
+                message: "Database error".to_string(),
+                error: Some(e.to_string()),
+            })
+        }
+    }
 }

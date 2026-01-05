@@ -6,11 +6,13 @@ import {PoseidonHasher} from "../src/PoseidonHasher.sol";
 import {PrivateIntentPool} from "../src/PrivateIntentPool.sol";
 import {PrivateSettlement} from "../src/PrivateSettlement.sol";
 
-/**
+/** 
  * @title DeployPoseidonHasher
  * @notice Deploy PoseidonHasher on Mantle (cheaper gas)
  * @dev Usage: forge script script/Deployer.s.sol:DeployPoseidonHasher --rpc-url $MANTLE_RPC_URL --broadcast --verify
- 
+ */
+
+    // run this before the scripts- source .env
 contract DeployPoseidonHasher is Script {
     function run() external returns (address) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -33,7 +35,7 @@ contract DeployPoseidonHasher is Script {
         
         return address(poseidon);
     }
-} */
+} 
 
 /**
  * @title DeployMantleContracts
@@ -71,25 +73,25 @@ contract DeployMantleContracts is Script {
         console.log("");
         
         // Deploy PrivateSettlement
-        // console.log("Deploying PrivateSettlement...");
-        // PrivateSettlement settlement = new PrivateSettlement(
-        //     owner,
-        //     relayer,
-        //     feeCollector,
-        //     poseidonHasher
-        // );
-        // console.log("PrivateSettlement deployed at:", address(settlement));
-        // console.log("");
+        console.log("Deploying PrivateSettlement...");
+        PrivateSettlement settlement = new PrivateSettlement(
+            owner,
+            relayer,
+            feeCollector,
+            poseidonHasher
+        );
+        console.log("PrivateSettlement deployed at:", address(settlement));
+        console.log("");
         
         vm.stopBroadcast();
         
         console.log("=== MANTLE DEPLOYMENT SUMMARY ===");
         console.log("PrivateIntentPool:", address(intentPool));
-        // console.log("PrivateSettlement:", address(settlement));
+        console.log("PrivateSettlement:", address(settlement));
         console.log("");
         console.log("Add to .env:");
         console.log("MANTLE_INTENT_POOL_ADDRESS=", address(intentPool));
-        // console.log("MANTLE_SETTLEMENT_ADDRESS=", address(settlement));
+        console.log("MANTLE_SETTLEMENT_ADDRESS=", address(settlement));
     }
 }
 
@@ -129,24 +131,24 @@ contract DeployEthereumContracts is Script {
         console.log("");
         
         // Deploy PrivateSettlement
-        // console.log("Deploying PrivateSettlement...");
-        // PrivateSettlement settlement = new PrivateSettlement(
-        //     owner,
-        //     relayer,
-        //     feeCollector,
-        //     poseidonHasher
-        // );
-        // console.log("PrivateSettlement deployed at:", address(settlement));
-        // console.log("");
+        console.log("Deploying PrivateSettlement...");
+        PrivateSettlement settlement = new PrivateSettlement(
+            owner,
+            relayer,
+            feeCollector,
+            poseidonHasher
+        );
+        console.log("PrivateSettlement deployed at:", address(settlement));
+        console.log("");
         
         vm.stopBroadcast();
         
         console.log("=== ETHEREUM DEPLOYMENT SUMMARY ===");
         console.log("PrivateIntentPool:", address(intentPool));
-        // console.log("PrivateSettlement:", address(settlement));
+        console.log("PrivateSettlement:", address(settlement));
         console.log("");
         console.log("Add to .env:");
         console.log("ETHEREUM_INTENT_POOL_ADDRESS=", address(intentPool));
-        // console.log("ETHEREUM_SETTLEMENT_ADDRESS=", address(settlement));
+        console.log("ETHEREUM_SETTLEMENT_ADDRESS=", address(settlement));
     }
 }

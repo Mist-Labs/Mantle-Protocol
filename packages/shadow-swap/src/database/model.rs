@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 use crate::models::{
     model::{Intent, IntentPrivacyParams, IntentStatus},
     schema::{
-        bridge_events, chain_transactions, indexer_checkpoints, intent_privacy_params, intents,
-        merkle_nodes, merkle_roots, merkle_trees,
+        bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
+        intent_privacy_params, intents, mantle_sepolia_intent_created, merkle_nodes, merkle_roots,
+        merkle_tree_ethereum_commitments, merkle_trees,
     },
 };
 
+// ==================== Intents ====================
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = intents)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -26,12 +28,14 @@ pub struct DbIntent {
     pub dest_amount: String,
     pub source_commitment: Option<String>,
     pub dest_fill_txid: Option<String>,
+    pub dest_registration_txid: Option<String>,
     pub source_complete_txid: Option<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deadline: i64,
     pub refund_address: Option<String>,
+    pub solver_address: Option<String>
 }
 
 #[derive(Insertable)]
@@ -47,13 +51,16 @@ pub struct NewIntent<'a> {
     pub dest_amount: &'a str,
     pub source_commitment: Option<&'a str>,
     pub dest_fill_txid: Option<&'a str>,
+    pub dest_registration_txid: Option<&'a str>,
     pub source_complete_txid: Option<&'a str>,
     pub status: &'a str,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deadline: i64,
     pub refund_address: Option<&'a str>,
+    pub solver_address: Option<&'a str>,
 }
+
 // ==================== Intent Privacy Params ====================
 
 #[derive(Debug, Clone, Queryable, Selectable)]
@@ -222,29 +229,79 @@ pub struct NewMerkleNode<'a> {
 #[diesel(table_name = merkle_roots)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct DbMerkleRoot {
-    pub tree_id: String,
-    pub root_hash: String,
+    pub tree_id: i32,
+    pub root: String,
     pub leaf_count: i64,
     pub updated_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Insertable, Debug)]
 #[diesel(table_name = merkle_roots)]
 pub struct NewMerkleRoot<'a> {
-    pub tree_id: &'a str,
-    pub root_hash: &'a str,
+    pub tree_id: i32,
+    pub root: &'a str,
     pub leaf_count: i64,
     pub updated_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = ethereum_sepolia_intent_created)]
+pub struct DbEthereumIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = mantle_sepolia_intent_created)]
+pub struct DbMantleIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = merkle_tree_ethereum_commitments)]
+pub struct DbEthereumCommitment {
+    pub commitment: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = merkle_tree_ethereum_commitments)]
+pub struct NewEthereumCommitment<'a> {
+    pub commitment: &'a str,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = ethereum_sepolia_intent_created)]
+pub struct NewEthereumIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = mantle_sepolia_intent_created)]
+pub struct NewMantleIntentCreated {
+    pub event_data: serde_json::Value,
+    pub block_number: i64,
+    pub log_index: i32,
 }
 
 impl IntentStatus {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Created => "created",
+            Self::Registered => "registered",
             Self::Pending => "pending",
             Self::Committed => "committed",
             Self::Filled => "filled",
-            Self::Completed => "completed",
+            Self::UserClaimed => "user_claimed",
+            Self::SolverPaid => "solver_paid",
             Self::Refunded => "refunded",
             Self::Failed => "failed",
         }
@@ -253,8 +310,12 @@ impl IntentStatus {
     pub fn from_str(s: &str) -> Result<Self, Box<dyn std::error::Error>> {
         match s {
             "created" => Ok(Self::Created),
+            "registered" => Ok(Self::Registered),
+            "pending" => Ok(Self::Pending),
+            "committed" => Ok(Self::Committed),
             "filled" => Ok(Self::Filled),
-            "completed" => Ok(Self::Completed),
+            "user_claimed" => Ok(Self::UserClaimed),
+            "solver_paid" => Ok(Self::SolverPaid),
             "refunded" => Ok(Self::Refunded),
             "failed" => Ok(Self::Failed),
             _ => Err(format!("Invalid intent status: {}", s).into()),
@@ -275,12 +336,14 @@ impl From<DbIntent> for Intent {
             dest_amount: db.dest_amount,
             source_commitment: db.source_commitment,
             dest_fill_txid: db.dest_fill_txid,
+            dest_registration_txid: db.dest_registration_txid,
             source_complete_txid: db.source_complete_txid,
             status: IntentStatus::from_str(&db.status).unwrap_or(IntentStatus::Failed),
             created_at: db.created_at,
             updated_at: db.updated_at,
             deadline: db.deadline as u64,
             refund_address: db.refund_address,
+            solver_address: db.solver_address,
         }
     }
 }
@@ -298,12 +361,14 @@ impl<'a> From<&'a Intent> for NewIntent<'a> {
             dest_amount: &intent.dest_amount,
             source_commitment: intent.source_commitment.as_deref(),
             dest_fill_txid: intent.dest_fill_txid.as_deref(),
+            dest_registration_txid: intent.dest_registration_txid.as_deref(),
             source_complete_txid: intent.source_complete_txid.as_deref(),
             status: intent.status.as_str(),
             created_at: intent.created_at,
             updated_at: intent.updated_at,
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
+            solver_address: intent.solver_address.as_deref(),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
@@ -10,11 +10,15 @@ use dotenv::dotenv;
 use tracing::info;
 
 use crate::database::model::{
-    BridgeStats, DbBridgeEvent, DbChainTransaction, DbMerkleNode, DbMerkleTree, NewBridgeEvent,
-    NewChainTransaction, NewMerkleNode, NewMerkleTree,
+    BridgeStats, DbBridgeEvent, DbChainTransaction, DbEthereumIntentCreated, DbMantleIntentCreated,
+    DbMerkleNode, DbMerkleTree, NewBridgeEvent, NewChainTransaction, NewMerkleNode, NewMerkleTree,
 };
+
 use crate::models::model::{EthereumFill, EthereumIntent, MantleFill, MantleIntent};
-use crate::models::schema::{bridge_events, chain_transactions, indexer_checkpoints};
+use crate::models::schema::{
+    bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
+    mantle_sepolia_intent_created, merkle_trees, root_syncs,
+};
 use crate::{
     database::model::{DbIntent, DbIntentPrivacyParams, NewIntent, NewIntentPrivacyParams},
     models::{
@@ -24,6 +28,7 @@ use crate::{
 };
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+pub const TREE_DEPTH: i32 = 20;
 
 pub type DbPool = Pool<ConnectionManager<PgConnection>>;
 
@@ -136,12 +141,14 @@ impl Database {
             dest_amount: &intent.dest_amount,
             source_commitment: intent.source_commitment.as_deref(),
             dest_fill_txid: intent.dest_fill_txid.as_deref(),
+            dest_registration_txid: intent.dest_registration_txid.as_deref(),
             source_complete_txid: intent.source_complete_txid.as_deref(),
             status: intent.status.as_str(),
             created_at: intent.created_at,
             updated_at: intent.updated_at,
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
+            solver_address: intent.solver_address.as_deref(),
         };
 
         diesel::insert_into(intents::table)
@@ -171,12 +178,14 @@ impl Database {
                 dest_amount: &intent.dest_amount,
                 source_commitment: intent.source_commitment.as_deref(),
                 dest_fill_txid: intent.dest_fill_txid.as_deref(),
+                dest_registration_txid: intent.dest_registration_txid.as_deref(),
                 source_complete_txid: intent.source_complete_txid.as_deref(),
                 status: intent.status.as_str(),
                 created_at: intent.created_at,
                 updated_at: intent.updated_at,
                 deadline: intent.deadline as i64,
                 refund_address: intent.refund_address.as_deref(),
+                solver_address: intent.solver_address.as_deref(),
             };
 
             diesel::insert_into(intents::table)
@@ -349,6 +358,46 @@ impl Database {
         Ok(results.into_iter().map(db_intent_to_model).collect())
     }
 
+    pub fn store_intent_privacy_params(
+        &self,
+        intent_id: &str,
+        commitment: &str,
+        secret: &str,
+        nullifier: &str,
+        claim_auth: &str,
+        recipient: &str,
+    ) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        let new_params = NewIntentPrivacyParams {
+            intent_id,
+            commitment: Some(commitment),
+            secret: Some(secret),
+            nullifier: Some(nullifier),
+            claim_signature: Some(claim_auth),
+            recipient: Some(recipient),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        diesel::insert_into(intent_privacy_params::table)
+            .values(&new_params)
+            .on_conflict(intent_privacy_params::intent_id)
+            .do_update()
+            .set((
+                intent_privacy_params::commitment.eq(Some(commitment)),
+                intent_privacy_params::secret.eq(Some(secret)),
+                intent_privacy_params::nullifier.eq(Some(nullifier)),
+                intent_privacy_params::claim_signature.eq(Some(claim_auth)),
+                intent_privacy_params::recipient.eq(Some(recipient)),
+                intent_privacy_params::updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to store/update privacy params")?;
+
+        Ok(())
+    }
+
     pub fn update_privacy_params(
         &self,
         intent_id: &str,
@@ -387,12 +436,14 @@ impl Database {
             dest_amount: &intent.dest_amount,
             source_commitment: intent.source_commitment.as_deref(),
             dest_fill_txid: intent.dest_fill_txid.as_deref(),
+            dest_registration_txid: intent.dest_fill_txid.as_deref(),
             source_complete_txid: intent.source_complete_txid.as_deref(),
             status: intent.status.as_str(),
             created_at: intent.created_at,
             updated_at: intent.updated_at,
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
+            solver_address: intent.solver_address.as_deref(),
         };
 
         diesel::update(intents::table.filter(intents::id.eq(&intent.id)))
@@ -448,6 +499,22 @@ impl Database {
         )
     }
 
+    pub fn update_dest_registration_txid(
+        &self,
+        intent_id: &str,
+        txid: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::models::schema::intents::dsl::*;
+
+        let mut conn = self.pool.get()?;
+
+        diesel::update(intents.filter(id.eq(intent_id)))
+            .set(dest_registration_txid.eq(Some(txid)))
+            .execute(&mut conn)?;
+
+        Ok(())
+    }
+
     pub fn record_nullifier_usage(
         &self,
         nullifier: &str,
@@ -471,6 +538,89 @@ impl Database {
             0,
             tx_hash,
         )
+    }
+
+    // ==================== SOLVER-RELATED OPERATIONS ====================
+    pub fn get_intent_solver(&self, intent_id: &str) -> Result<Option<String>> {
+        let mut conn = self.get_connection()?;
+
+        let solver_address = intents::table
+            .filter(intents::id.eq(intent_id))
+            .select(intents::solver_address)
+            .first::<Option<String>>(&mut conn)
+            .optional()
+            .context("Failed to get solver address")?;
+
+        Ok(solver_address.flatten())
+    }
+
+    pub fn update_intent_with_solver(
+        &self,
+        intent_id: &str,
+        solver_address: &str,
+        status: IntentStatus,
+    ) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(intents::table.filter(intents::id.eq(intent_id)))
+            .set((
+                intents::solver_address.eq(solver_address),
+                intents::status.eq(status.as_str()),
+                intents::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to update intent with solver")?;
+
+        Ok(())
+    }
+
+    pub fn update_solver_address(&self, intent_id: &str, solver_address: &str) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(intents::table.filter(intents::id.eq(intent_id)))
+            .set((
+                intents::solver_address.eq(solver_address),
+                intents::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to update solver address")?;
+
+        Ok(())
+    }
+
+    pub fn get_intents_by_solver(&self, solver_address: &str, limit: usize) -> Result<Vec<Intent>> {
+        let mut conn = self.get_connection()?;
+
+        let results = intents::table
+            .filter(intents::solver_address.eq(solver_address))
+            .order(intents::created_at.desc())
+            .limit(limit as i64)
+            .select(DbIntent::as_select())
+            .load::<DbIntent>(&mut conn)
+            .context("Failed to get intents by solver")?;
+
+        Ok(results.into_iter().map(db_intent_to_model).collect())
+    }
+
+    pub fn get_solver_stats(&self, solver_address: &str) -> Result<(i64, f64)> {
+        let mut conn = self.get_connection()?;
+
+        // Count total intents filled by this solver
+        let total_filled = intents::table
+            .filter(intents::solver_address.eq(solver_address))
+            .filter(intents::status.eq_any(vec!["filled", "completed", "solver_paid"]))
+            .count()
+            .get_result::<i64>(&mut conn)
+            .context("Failed to count solver intents")?;
+
+        // Calculate total volume (simplified - you may want to handle decimals better)
+        let intents_list = self.get_intents_by_solver(solver_address, 10000)?;
+        let total_volume: f64 = intents_list
+            .iter()
+            .filter_map(|intent| intent.amount.parse::<f64>().ok())
+            .sum();
+
+        Ok((total_filled, total_volume))
     }
 
     // ==================== Chain Transaction Logging ====================
@@ -642,9 +792,18 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_merkle_tree_by_name(&self, tree_name: &str) -> Result<Option<DbMerkleTree>> {
-        use crate::models::schema::merkle_trees;
+    pub fn ensure_merkle_tree(&self, tree_name: &str, depth: i32) -> Result<DbMerkleTree> {
+        if let Some(tree) = self.get_merkle_tree_by_name(tree_name)? {
+            return Ok(tree);
+        }
 
+        self.create_merkle_tree(tree_name, depth)?;
+
+        self.get_merkle_tree_by_name(tree_name)?
+            .ok_or_else(|| anyhow!("Failed to ensure merkle tree {}", tree_name))
+    }
+
+    pub fn get_merkle_tree_by_name(&self, tree_name: &str) -> Result<Option<DbMerkleTree>> {
         let mut conn = self.get_connection()?;
 
         let tree = merkle_trees::table
@@ -658,8 +817,6 @@ impl Database {
     }
 
     pub fn update_merkle_root(&self, tree_id: i32, root: &str) -> Result<()> {
-        use crate::models::schema::merkle_trees;
-
         let mut conn = self.get_connection()?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree_id)))
@@ -674,8 +831,6 @@ impl Database {
     }
 
     pub fn increment_leaf_count(&self, tree_id: i32, count: i64) -> Result<()> {
-        use crate::models::schema::merkle_trees;
-
         let mut conn = self.get_connection()?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree_id)))
@@ -687,6 +842,80 @@ impl Database {
             .context("Failed to increment leaf count")?;
 
         Ok(())
+    }
+
+    pub fn get_ethereum_commitment_tree_size(&self) -> Result<usize> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        Ok(tree.leaf_count as usize)
+    }
+
+    pub fn add_to_ethereum_commitment_tree(&self, _commitment: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        self.increment_leaf_count(tree.tree_id, 1)?;
+        Ok(())
+    }
+
+    pub fn set_ethereum_commitment_node(
+        &self,
+        level: usize,
+        index: usize,
+        hash: &str,
+    ) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
+        Ok(())
+    }
+
+    pub fn get_ethereum_commitment_node(
+        &self,
+        level: usize,
+        index: usize,
+    ) -> Result<Option<String>> {
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
+        Ok(node.map(|n| n.hash))
+    }
+
+    pub fn clear_ethereum_commitment_nodes(&self) -> Result<()> {
+        use crate::models::schema::merkle_nodes;
+
+        let mut conn = self.get_connection()?;
+
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
+            .execute(&mut conn)
+            .context("Failed to clear ethereum commitment nodes")?;
+
+        Ok(())
+    }
+
+    pub fn clear_ethereum_commitment_tree(&self) -> Result<()> {
+        use crate::models::schema::merkle_trees;
+
+        let mut conn = self.get_connection()?;
+
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        self.clear_ethereum_commitment_nodes()?;
+
+        diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
+            .set(merkle_trees::leaf_count.eq(0))
+            .execute(&mut conn)
+            .context("Failed to reset ethereum commitment tree leaf count")?;
+
+        Ok(())
+    }
+
+    pub fn get_ethereum_commitment_tree(&self) -> Result<Vec<String>> {
+        let _tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let commitments = self.get_all_ethereum_commitments()?;
+
+        Ok(commitments)
     }
 
     // ==================== Merkle Nodes ====================
@@ -780,6 +1009,18 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_merkle_tree_by_name(&self, tree_name: &str) -> Result<()> {
+        use crate::models::schema::merkle_trees;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(merkle_trees::table.filter(merkle_trees::tree_name.eq(tree_name)))
+            .execute(&mut conn)
+            .context("Failed to delete merkle tree by name")?;
+
+        Ok(())
+    }
+
     // ==================== Merkle Tree Operations ====================
 
     /// Get Mantle tree leaves in order
@@ -788,9 +1029,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         let nodes = merkle_nodes::table
             .filter(merkle_nodes::tree_id.eq(tree.tree_id))
@@ -809,9 +1048,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         let nodes = merkle_nodes::table
             .filter(merkle_nodes::tree_id.eq(tree.tree_id))
@@ -826,27 +1063,21 @@ impl Database {
 
     /// Get Mantle tree size (leaf count)
     pub fn get_mantle_tree_size(&self) -> Result<usize> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         Ok(tree.leaf_count as usize)
     }
 
     /// Get Ethereum tree size (leaf count)
     pub fn get_ethereum_tree_size(&self) -> Result<usize> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         Ok(tree.leaf_count as usize)
     }
 
     /// Add leaf to Mantle tree and increment counter
     pub fn add_to_mantle_tree(&self, _commitment: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         self.increment_leaf_count(tree.tree_id, 1)?;
         Ok(())
@@ -854,9 +1085,7 @@ impl Database {
 
     /// Add leaf to Ethereum tree and increment counter
     pub fn add_to_ethereum_tree(&self, _intent_id: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         self.increment_leaf_count(tree.tree_id, 1)?;
         Ok(())
@@ -864,9 +1093,7 @@ impl Database {
 
     /// Set Mantle node at specific level and index
     pub fn set_mantle_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
         Ok(())
@@ -874,9 +1101,7 @@ impl Database {
 
     /// Set Ethereum node at specific level and index
     pub fn set_ethereum_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
         Ok(())
@@ -884,9 +1109,7 @@ impl Database {
 
     /// Get Mantle node at specific level and index
     pub fn get_mantle_node(&self, level: usize, index: usize) -> Result<Option<String>> {
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
         Ok(node.map(|n| n.hash))
@@ -894,9 +1117,7 @@ impl Database {
 
     /// Get Ethereum node at specific level and index
     pub fn get_ethereum_node(&self, level: usize, index: usize) -> Result<Option<String>> {
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
         Ok(node.map(|n| n.hash))
@@ -908,9 +1129,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
             .set((
@@ -931,9 +1150,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
             .set((
@@ -954,9 +1171,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("mantle")?
-            .ok_or_else(|| anyhow::anyhow!("Mantle tree not found"))?;
+        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
 
         diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
             .execute(&mut conn)
@@ -970,9 +1185,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self
-            .get_merkle_tree_by_name("ethereum")?
-            .ok_or_else(|| anyhow::anyhow!("Ethereum tree not found"))?;
+        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
 
         diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
             .execute(&mut conn)?;
@@ -981,7 +1194,7 @@ impl Database {
     }
 
     pub fn record_root(&self, chain: &str, root: &str) -> Result<()> {
-        let mut conn = self.get_connection()?;
+        // let mut conn = self.get_connection()?;
 
         let tree = self
             .get_merkle_tree_by_name(chain)?
@@ -990,6 +1203,20 @@ impl Database {
         self.update_merkle_root(tree.tree_id, root)?;
 
         Ok(())
+    }
+
+    pub fn get_last_synced_root_by_type(&self, sync_type: &str) -> Result<Option<String>> {
+        let mut conn = self.get_connection()?;
+
+        let result = root_syncs::table
+            .filter(root_syncs::sync_type.eq(sync_type))
+            .order(root_syncs::created_at.desc())
+            .select(root_syncs::root)
+            .first::<String>(&mut conn)
+            .optional()
+            .context("Failed to fetch last synced root by type")?;
+
+        Ok(result)
     }
 
     pub fn get_latest_root(&self, chain: &str) -> Result<Option<String>> {
@@ -1149,6 +1376,46 @@ impl Database {
         Ok(fills)
     }
 
+    pub fn get_all_ethereum_commitments(&self) -> Result<Vec<String>> {
+        let mut conn = self.get_connection()?;
+
+        let rows = ethereum_sepolia_intent_created::table
+            .select(DbEthereumIntentCreated::as_select())
+            .order((
+                ethereum_sepolia_intent_created::block_number.asc(),
+                ethereum_sepolia_intent_created::log_index.asc(),
+            ))
+            .load::<DbEthereumIntentCreated>(&mut conn)
+            .context("Failed to load ethereum intent created events")?;
+
+        let commitments = rows
+            .into_iter()
+            .filter_map(|row| row.event_data.get("commitment")?.as_str().map(String::from))
+            .collect();
+
+        Ok(commitments)
+    }
+
+    pub fn get_all_mantle_commitments(&self) -> Result<Vec<String>> {
+        let mut conn = self.get_connection()?;
+
+        let rows = mantle_sepolia_intent_created::table
+            .select(DbMantleIntentCreated::as_select())
+            .order((
+                mantle_sepolia_intent_created::block_number.asc(),
+                mantle_sepolia_intent_created::log_index.asc(),
+            ))
+            .load::<DbMantleIntentCreated>(&mut conn)
+            .context("Failed to load mantle intent created events")?;
+
+        let commitments = rows
+            .into_iter()
+            .filter_map(|row| row.event_data.get("commitment")?.as_str().map(String::from))
+            .collect();
+
+        Ok(commitments)
+    }
+
     // ==================== Statistics ====================
 
     pub fn get_bridge_stats(&self) -> Result<BridgeStats> {
@@ -1230,8 +1497,12 @@ impl Database {
 fn parse_status(s: &str) -> IntentStatus {
     match s {
         "created" => IntentStatus::Created,
+        "registered" => IntentStatus::Registered,
+        "committed" => IntentStatus::Committed,
+        "pending" => IntentStatus::Pending,
         "filled" => IntentStatus::Filled,
-        "completed" => IntentStatus::Completed,
+        "user_claimed" => IntentStatus::UserClaimed,
+        "solver_paid" => IntentStatus::SolverPaid,
         "refunded" => IntentStatus::Refunded,
         "failed" => IntentStatus::Failed,
         _ => IntentStatus::Failed,
@@ -1250,11 +1521,13 @@ fn db_intent_to_model(r: DbIntent) -> Intent {
         dest_amount: r.dest_amount,
         source_commitment: r.source_commitment,
         dest_fill_txid: r.dest_fill_txid,
+        dest_registration_txid: r.dest_registration_txid,
         source_complete_txid: r.source_complete_txid,
         status: parse_status(&r.status),
         created_at: r.created_at,
         updated_at: r.updated_at,
         deadline: r.deadline as u64,
         refund_address: r.refund_address,
+        solver_address: r.solver_address,
     }
 }

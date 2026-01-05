@@ -19,9 +19,6 @@ pub trait ChainRelayer: Send + Sync {
         source_chain: u32,
         token: &str,
         amount: &str,
-        source_root: &str,
-        merkle_path: &[String],
-        leaf_index: u32,
     ) -> impl std::future::Future<Output = Result<String>> + Send;
     fn claim_withdrawal(
         &self,
@@ -34,6 +31,7 @@ pub trait ChainRelayer: Send + Sync {
     fn mark_filled(
         &self,
         intent_id: &str,
+        solver_address: &str,
         merkle_path: &[String],
         leaf_index: u32,
     ) -> impl std::future::Future<Output = Result<String>> + Send;

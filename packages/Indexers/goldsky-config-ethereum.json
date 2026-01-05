@@ -1,0 +1,27 @@
+{
+  "version": "1",
+  "name": "shadowswap-ethereum",
+  "abis": {
+    "IntentPool": {
+      "path": "./abis/IntentPool.json"
+    },
+    "Settlement": {
+      "path": "./abis/Settlement.json"
+    }
+  },
+  "chains": ["sepolia"],
+  "instances": [
+    {
+      "abi": "IntentPool",
+      "address": "0xA019C4fFC50b58AF6221F9EB59126630E26f3326",
+      "chain": "sepolia",
+      "startBlock": 9860983
+    },
+    {
+      "abi": "Settlement",
+      "address": "0x0d632dC7786CD01712ED3CF3c6fa7F9e9C67Fa49",
+      "chain": "sepolia",
+      "startBlock": 9860983
+    }
+  ]
+}

@@ -1,10 +1,16 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use tokio::time;
 
-use tokio::sync::RwLock;
-use crate::{database::database::Database, ethereum::relayer::{EthClient, ethereum_contracts}, mantle::relayer::{MantleClient, mantle_contracts}, merkle_manager::merkletreemanager::MerkleTreeManager, models::model::{DatabaseConfig, ServerConfig}};
 use crate::models::model::{BridgeMetrics, IntentOperationState};
+use crate::{
+    database::database::Database,
+    ethereum::relayer::{EthClient, ethereum_contracts},
+    mantle::relayer::{MantleClient, mantle_contracts},
+    merkle_manager::merkle_manager::MerkleTreeManager,
+    models::model::{DatabaseConfig, ServerConfig},
+};
+use tokio::sync::RwLock;
 
 pub struct BridgeCoordinator {
     pub ethereum_relayer: Arc<EthereumRelayer>,
@@ -14,20 +20,6 @@ pub struct BridgeCoordinator {
     pub metrics: Arc<RwLock<BridgeMetrics>>,
     pub operation_states: Arc<RwLock<HashMap<String, IntentOperationState>>>,
     pub start_time: time::Instant,
-}
-
-#[derive(Debug, Clone)]
-pub struct SecretMonitorStats {
-    pub processed_nullifiers: usize,
-    pub ethereum_check_interval_secs: u64,
-    pub mantle_check_interval_secs: u64,
-}
-
-pub struct SecretMonitor {
-    pub ethereum_relayer: Arc<EthereumRelayer>,
-    pub mantle_relayer: Arc<MantleRelayer>,
-    pub database: Arc<Database>,
-    pub processed_nullifiers: Arc<tokio::sync::RwLock<HashSet<String>>>,
 }
 
 pub struct EthereumRelayer {
@@ -47,7 +39,6 @@ pub struct EthereumConfig {
     pub settlement_address: String,
     pub chain_id: u32,
 }
-
 
 pub struct MantleRelayer {
     pub client: Arc<MantleClient>,
@@ -76,4 +67,3 @@ pub struct BridgeConfig {
     pub relayer_address: String,
     pub fee_collector: String,
 }
-

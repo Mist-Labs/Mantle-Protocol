@@ -11,7 +11,15 @@ import {
 } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract MockERC20 is ERC20 {
-    constructor() ERC20("Mock Token", "MOCK") {}
+    uint8 private _decimals;
+
+    constructor(string memory name, string memory symbol, uint8 decimals_) ERC20(name, symbol) {
+        _decimals = decimals_;
+    }
+
+    function decimals() public view virtual override returns (uint8) {
+        return _decimals;
+    }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -55,7 +63,7 @@ contract IntegrationTest is Test {
             feeCollector,
             address(poseidon)
         );
-        token = new MockERC20();
+        token = new MockERC20("Mock Token", "MOCK", 18);
 
         recipientAddr = vm.addr(recipientPrivateKey);
 
@@ -68,10 +76,20 @@ contract IntegrationTest is Test {
         vm.prank(solver);
         token.approve(address(settlement), type(uint256).max);
 
-        // Add token to whitelists
+        // Add token to whitelists with proper parameters
         vm.startPrank(owner);
-        intentPool.addSupportedToken(address(token));
-        settlement.addSupportedToken(address(token));
+        intentPool.addSupportedToken(
+            address(token),
+            0.01 ether,  // minAmount
+            100 ether,   // maxAmount
+            18           // decimals
+        );
+        settlement.addSupportedToken(
+            address(token),
+            0.01 ether,  // minAmount
+            100 ether,   // maxAmount
+            18           // decimals
+        );
         vm.stopPrank();
     }
 
@@ -100,7 +118,8 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0  // customDeadline (0 = use default)
         );
 
         assertEq(token.balanceOf(address(intentPool)), TEST_AMOUNT);
@@ -110,42 +129,53 @@ contract IntegrationTest is Test {
         vm.prank(relayer);
         settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
-        // 4. SOLVER: Fill intent on destination chain (settlement)
+        // 4. RELAYER: Register intent on destination chain
         bytes32[] memory sourceProof = new bytes32[](0);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            sourceProof,
+            0
+        );
+
+        // 5. SOLVER: Fill intent on destination chain (settlement)
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            sourceProof,
-            0
+            TEST_AMOUNT
         );
 
         assertEq(token.balanceOf(address(settlement)), TEST_AMOUNT);
 
-        // 5. RELAYER: Sync fill tree root back to source
+        // 6. RELAYER: Sync fill tree root back to source
         bytes32 destRoot = settlement.getMerkleRoot();
         vm.prank(relayer);
         intentPool.syncDestChainRoot(DEST_CHAIN, destRoot);
 
-        // 6. SOLVER: Claim reward by marking intent as filled on source chain
+        // 7. SOLVER: Claim reward by marking intent as filled on source chain
         bytes32[] memory destProof = settlement.generateFillProof(intentId);
 
         vm.prank(solver);
-        intentPool.markFilled(intentId, destProof, 0);
+        intentPool.markFilled(intentId, solver, destProof, 0);
 
         // Verify solver received repayment on source chain
         uint256 poolFee = (TEST_AMOUNT * intentPool.FEE_BPS()) / 10000;
-        assertEq(token.balanceOf(solver), 1000 ether - poolFee);
+        assertEq(token.balanceOf(solver), 1000 ether - TEST_AMOUNT + (TEST_AMOUNT - poolFee));
 
         // Verify solver was recorded
         assertEq(intentPool.getSolver(intentId), solver);
 
-        // 7. USER: Claim withdrawal on destination chain
+        // 8. USER: Claim withdrawal on destination chain
         bytes32 authHash = keccak256(
             abi.encodePacked(intentId, nullifier, recipientAddr)
         );
@@ -197,15 +227,29 @@ contract IntegrationTest is Test {
                 address(token),
                 TEST_AMOUNT,
                 DEST_CHAIN,
-                user
+                user,
+                0
             );
 
-            // Fill intent (single-leaf tree)
+            // Register and fill intent (single-leaf tree)
             bytes32 sourceRoot = commitment;
             vm.prank(relayer);
             settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
 
             bytes32[] memory proof = new bytes32[](0);
+
+            vm.prank(relayer);
+            settlement.registerIntent(
+                intentId,
+                commitment,
+                address(token),
+                TEST_AMOUNT,
+                SOURCE_CHAIN,
+                uint64(block.timestamp + 1 hours),
+                sourceRoot,
+                proof,
+                0
+            );
 
             vm.prank(solver);
             settlement.fillIntent(
@@ -213,10 +257,7 @@ contract IntegrationTest is Test {
                 commitment,
                 SOURCE_CHAIN,
                 address(token),
-                TEST_AMOUNT,
-                sourceRoot,
-                proof,
-                0
+                TEST_AMOUNT
             );
         }
 
@@ -241,7 +282,7 @@ contract IntegrationTest is Test {
     // ========== TOKEN WHITELIST TESTS ===========
 
     function test_RevertWhen_CreateIntent_TokenNotSupported() public {
-        MockERC20 unsupportedToken = new MockERC20();
+        MockERC20 unsupportedToken = new MockERC20("Unsupported", "UNSUP", 18);
         unsupportedToken.mint(relayer, 1000 ether);
         
         vm.prank(relayer);
@@ -266,12 +307,13 @@ contract IntegrationTest is Test {
             address(unsupportedToken),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
     }
 
     function test_RevertWhen_FillIntent_TokenNotSupported() public {
-        MockERC20 unsupportedToken = new MockERC20();
+        MockERC20 unsupportedToken = new MockERC20("Unsupported", "UNSUP", 18);
         unsupportedToken.mint(solver, 1000 ether);
         
         vm.prank(solver);
@@ -294,14 +336,15 @@ contract IntegrationTest is Test {
 
         bytes32[] memory proof = new bytes32[](0);
 
-        vm.prank(solver);
+        vm.prank(relayer);
         vm.expectRevert(PrivateSettlement.TokenNotSupported.selector);
-        settlement.fillIntent(
+        settlement.registerIntent(
             intentId,
             commitment,
-            SOURCE_CHAIN,
             address(unsupportedToken),
             TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
             sourceRoot,
             proof,
             0
@@ -309,11 +352,16 @@ contract IntegrationTest is Test {
     }
 
     function test_AddRemoveToken_WorksCorrectly() public {
-        MockERC20 newToken = new MockERC20();
+        MockERC20 newToken = new MockERC20("New Token", "NEW", 6);
 
-        // Add token
+        // Add token with proper parameters
         vm.prank(owner);
-        intentPool.addSupportedToken(address(newToken));
+        intentPool.addSupportedToken(
+            address(newToken),
+            1e6,      // 1 USDC minimum (6 decimals)
+            1000e6,   // 1000 USDC maximum
+            6         // decimals
+        );
         
         assertTrue(intentPool.isTokenSupported(address(newToken)));
         assertEq(intentPool.getSupportedTokenCount(), 2); // token + newToken
@@ -324,6 +372,74 @@ contract IntegrationTest is Test {
         
         assertFalse(intentPool.isTokenSupported(address(newToken)));
         assertEq(intentPool.getSupportedTokenCount(), 1);
+    }
+
+    function test_TokenConfig_UpdateLimits() public {
+        // Update existing token config
+        vm.prank(owner);
+        intentPool.updateTokenConfig(
+            address(token),
+            0.1 ether,  // new minAmount
+            50 ether    // new maxAmount
+        );
+
+        PrivateIntentPool.TokenConfig memory config = intentPool.getTokenConfig(address(token));
+        assertEq(config.minFillAmount, 0.1 ether);
+        assertEq(config.maxFillAmount, 50 ether);
+    }
+
+    function test_RevertWhen_AmountBelowMinimum() public {
+        bytes32 secret = keccak256("secret");
+        bytes32 nullifier = keccak256("nullifier");
+        uint256 tooSmallAmount = 0.005 ether; // Below 0.01 ether minimum
+        bytes32[4] memory inputs = [
+            secret,
+            nullifier,
+            bytes32(tooSmallAmount),
+            bytes32(uint256(DEST_CHAIN))
+        ];
+        bytes32 commitment = poseidon.poseidon(inputs);
+        bytes32 intentId = keccak256("intent");
+
+        vm.prank(relayer);
+        vm.expectRevert(PrivateIntentPool.InvalidAmount.selector);
+        intentPool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            tooSmallAmount,
+            DEST_CHAIN,
+            user,
+            0
+        );
+    }
+
+    function test_RevertWhen_AmountAboveMaximum() public {
+        bytes32 secret = keccak256("secret");
+        bytes32 nullifier = keccak256("nullifier");
+        uint256 tooLargeAmount = 150 ether; // Above 100 ether maximum
+        bytes32[4] memory inputs = [
+            secret,
+            nullifier,
+            bytes32(tooLargeAmount),
+            bytes32(uint256(DEST_CHAIN))
+        ];
+        bytes32 commitment = poseidon.poseidon(inputs);
+        bytes32 intentId = keccak256("intent");
+
+        token.mint(relayer, 150 ether);
+
+        vm.prank(relayer);
+        vm.expectRevert(PrivateIntentPool.InvalidAmount.selector);
+        intentPool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            tooLargeAmount,
+            DEST_CHAIN,
+            user,
+            0
+        );
     }
 
     // ========== PRIVACY TESTS ==========
@@ -374,7 +490,8 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         bytes32 sourceRoot = commitment;
@@ -383,16 +500,26 @@ contract IntegrationTest is Test {
 
         bytes32[] memory proof = new bytes32[](0);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId,
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
 
         // Claim once
@@ -424,7 +551,7 @@ contract IntegrationTest is Test {
         bytes32 secret2 = keccak256("secret2");
         bytes32[4] memory inputs2 = [
             secret2,
-            nullifier,
+            nullifier,  // Same nullifier
             bytes32(TEST_AMOUNT),
             bytes32(uint256(DEST_CHAIN))
         ];
@@ -437,7 +564,8 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         bytes32 sourceRoot2 = commitment2;
@@ -446,16 +574,26 @@ contract IntegrationTest is Test {
 
         bytes32[] memory proof2 = new bytes32[](0);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId2,
+            commitment2,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot2,
+            proof2,
+            0
+        );
+
         vm.prank(solver);
         settlement.fillIntent(
             intentId2,
             commitment2,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot2,
-            proof2,
-            0
+            TEST_AMOUNT
         );
 
         vm.prank(relayer);
@@ -490,12 +628,13 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         uint256 userBalanceBefore = token.balanceOf(user);
 
-        vm.warp(block.timestamp + intentPool.INTENT_TIMEOUT() + 1);
+        vm.warp(block.timestamp + intentPool.DEFAULT_INTENT_TIMEOUT() + 1);
 
         intentPool.refund(intentId);
 
@@ -524,10 +663,11 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
-        vm.warp(block.timestamp + intentPool.INTENT_TIMEOUT() + 1);
+        vm.warp(block.timestamp + intentPool.DEFAULT_INTENT_TIMEOUT() + 1);
         intentPool.refund(intentId);
 
         bytes32 destRoot = intentId;
@@ -538,7 +678,7 @@ contract IntegrationTest is Test {
 
         vm.prank(solver);
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver, proof, 0);
     }
 
     // ========== STRESS TESTS ==========
@@ -565,7 +705,8 @@ contract IntegrationTest is Test {
                 address(token),
                 TEST_AMOUNT,
                 DEST_CHAIN,
-                user
+                user,
+                0
             );
         }
 
@@ -598,7 +739,8 @@ contract IntegrationTest is Test {
             address(token),
             largeAmount,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         assertEq(token.balanceOf(address(intentPool)), largeAmount);
@@ -625,7 +767,8 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         uint256 poolBalance = token.balanceOf(address(intentPool));
@@ -637,36 +780,11 @@ contract IntegrationTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.expectRevert(PrivateIntentPool.RootNotSynced.selector);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver, proof, 0);
 
         vm.stopPrank();
 
         assertEq(token.balanceOf(address(intentPool)), poolBalance);
-    }
-
-    function test_Security_ReentrancyProtection() public {
-        bytes32 secret = keccak256("secret");
-        bytes32 nullifier = keccak256("nullifier");
-        bytes32[4] memory inputs = [
-            secret,
-            nullifier,
-            bytes32(TEST_AMOUNT),
-            bytes32(uint256(DEST_CHAIN))
-        ];
-        bytes32 commitment = poseidon.poseidon(inputs);
-        bytes32 intentId = keccak256("intent");
-
-        vm.prank(relayer);
-        intentPool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            TEST_AMOUNT,
-            DEST_CHAIN,
-            user
-        );
-
-        assertTrue(true);
     }
 
     function test_Security_MultipleSolversCompete() public {
@@ -688,7 +806,8 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         bytes32 destRoot = intentId;
@@ -699,12 +818,12 @@ contract IntegrationTest is Test {
 
         address solver1 = makeAddr("solver1");
         vm.prank(solver1);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver1, proof, 0);
 
         address solver2 = makeAddr("solver2");
         vm.prank(solver2);
         vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        intentPool.markFilled(intentId, proof, 0);
+        intentPool.markFilled(intentId, solver2, proof, 0);
 
         assertEq(intentPool.getSolver(intentId), solver1);
     }
@@ -732,7 +851,8 @@ contract IntegrationTest is Test {
             address(token),
             TEST_AMOUNT,
             DEST_CHAIN,
-            user
+            user,
+            0
         );
 
         uint256 gasAfterCreate = gasleft();
@@ -744,6 +864,19 @@ contract IntegrationTest is Test {
 
         bytes32[] memory proof = new bytes32[](0);
 
+        vm.prank(relayer);
+        settlement.registerIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            SOURCE_CHAIN,
+            uint64(block.timestamp + 1 hours),
+            sourceRoot,
+            proof,
+            0
+        );
+
         gasStart = gasleft();
         vm.prank(solver);
         settlement.fillIntent(
@@ -751,10 +884,7 @@ contract IntegrationTest is Test {
             commitment,
             SOURCE_CHAIN,
             address(token),
-            TEST_AMOUNT,
-            sourceRoot,
-            proof,
-            0
+            TEST_AMOUNT
         );
         uint256 gasAfterFill = gasleft();
         console.log("Gas for fillIntent:", gasStart - gasAfterFill);
@@ -767,7 +897,7 @@ contract IntegrationTest is Test {
 
         gasStart = gasleft();
         vm.prank(solver);
-        intentPool.markFilled(intentId, fillProof, 0);
+        intentPool.markFilled(intentId, solver, fillProof, 0);
         console.log("Gas for markFilled:", gasStart - gasleft());
     }
 }

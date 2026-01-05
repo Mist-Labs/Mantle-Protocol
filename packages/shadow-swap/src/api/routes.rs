@@ -3,16 +3,14 @@ use std::collections::HashMap;
 use actix_web::{HttpRequest, HttpResponse, Responder, get, post, web};
 use chrono::Utc;
 use serde_json::json;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
     AppState,
     api::{
         helper::{
-            handle_intent_completed_event, handle_intent_created_event, handle_intent_filled_event,
-            handle_intent_refunded_event, handle_root_synced_event,
-            handle_withdrawal_claimed_event, validate_hmac,
+            handle_intent_created_event, handle_intent_filled_event, handle_intent_marked_filled_event, handle_intent_refunded_event, handle_intent_registered_event, handle_root_synced_event, handle_withdrawal_claimed_event, validate_hmac
         },
         model::{
             AllPricesResponse, ConvertRequest, ConvertResponse, IndexerEventRequest,
@@ -26,7 +24,7 @@ use crate::{
 // ============================================================================
 // BRIDGE OPERATIONS
 // ============================================================================
-
+// secret and nullifier should be encrypted on frontend before sending to backend
 #[post("/bridge/initiate")]
 pub async fn initiate_bridge(
     req: HttpRequest,
@@ -37,6 +35,8 @@ pub async fn initiate_bridge(
     if let Err(response) = validate_hmac(&req, &body, &app_state) {
         return response;
     }
+
+    //encrypt secret here
 
     // Parse request body
     let request: InitiateBridgeRequest = match serde_json::from_slice(&body) {
@@ -61,6 +61,36 @@ pub async fn initiate_bridge(
             commitment: String::new(),
             message: "Invalid commitment format".to_string(),
             error: Some("Commitment must be 32-byte hex string".to_string()),
+        });
+    }
+
+    if !request.secret.starts_with("0x") {
+        return HttpResponse::BadRequest().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: String::new(),
+            commitment: String::new(),
+            message: "Invalid secret format".to_string(),
+            error: Some("Secret must be 32-byte hex string".to_string()),
+        });
+    }
+
+    if !request.nullifier.starts_with("0x") {
+        return HttpResponse::BadRequest().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: String::new(),
+            commitment: String::new(),
+            message: "Invalid nullifier format".to_string(),
+            error: Some("Nullifier must be 32-byte hex string".to_string()),
+        });
+    }
+
+    if !request.claim_auth.starts_with("0x") || request.claim_auth.len() != 132 {
+        return HttpResponse::BadRequest().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: String::new(),
+            commitment: String::new(),
+            message: "Invalid claim_auth format".to_string(),
+            error: Some("Claim authorization must be 65-byte hex signature".to_string()),
         });
     }
 
@@ -126,12 +156,14 @@ pub async fn initiate_bridge(
         dest_amount: dest_amount.to_string(),
         source_commitment: Some(request.commitment.clone()),
         dest_fill_txid: None,
+        dest_registration_txid: None,
         source_complete_txid: None,
         status: IntentStatus::Created,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         deadline,
         refund_address: Some(request.refund_address.clone()),
+        solver_address: None,
     };
 
     if let Err(e) = app_state.database.create_intent(&intent) {
@@ -141,6 +173,24 @@ pub async fn initiate_bridge(
             intent_id: intent_id.clone(),
             commitment: String::new(),
             message: "Failed to initialize bridge intent".to_string(),
+            error: Some(e.to_string()),
+        });
+    }
+
+    if let Err(e) = app_state.database.store_intent_privacy_params(
+        &intent_id,
+        &request.commitment,
+        &request.secret,
+        &request.nullifier,
+        &request.claim_auth,
+        &request.recipient,
+    ) {
+        error!("Failed to store privacy params for {}: {}", intent_id, e);
+        return HttpResponse::InternalServerError().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: intent_id.clone(),
+            commitment: String::new(),
+            message: "Failed to store privacy parameters".to_string(),
             error: Some(e.to_string()),
         });
     }
@@ -247,6 +297,10 @@ pub async fn indexer_event(
     body: web::Bytes,
 ) -> impl Responder {
     // HMAC validation for security
+    if let Ok(body_str) = std::str::from_utf8(&body) {
+        debug!("📥 Received indexer event body: {}", body_str);
+    }
+
     if let Err(response) = validate_hmac(&req, &body, &app_state) {
         return response;
     }
@@ -270,7 +324,8 @@ pub async fn indexer_event(
     match request.event_type.as_str() {
         "intent_created" => handle_intent_created_event(&app_state, &request).await,
         "intent_filled" => handle_intent_filled_event(&app_state, &request).await,
-        "intent_completed" => handle_intent_completed_event(&app_state, &request).await,
+        "intent_registered" => handle_intent_registered_event(&app_state, &request).await,
+        "intent_marked_filled" => handle_intent_marked_filled_event(&app_state, &request).await,
         "intent_refunded" => handle_intent_refunded_event(&app_state, &request).await,
         "withdrawal_claimed" => handle_withdrawal_claimed_event(&app_state, &request).await,
         "root_synced" => handle_root_synced_event(&app_state, &request).await,
@@ -505,6 +560,6 @@ pub async fn root() -> impl Responder {
         "version": "1.0.0",
         "status": "operational",
         "supported_chains": ["ethereum", "mantle"],
-        "supported_tokens": ["ETH", "USDC", "USDT", "WETH", "DAI", "MNT"]
+        "supported_tokens": ["ETH", "USDC", "USDT", "WETH", "MNT"]
     }))
 }

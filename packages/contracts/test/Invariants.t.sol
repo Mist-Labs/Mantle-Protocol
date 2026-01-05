@@ -9,8 +9,16 @@ import {PrivateSettlement} from "../src/PrivateSettlement.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockERC20 is ERC20 {
-    constructor() ERC20("Mock", "MOCK") {}
-    function mint(address to, uint256 amount) external { _mint(to, amount); }
+    uint8 private _decimals;
+    constructor() ERC20("Mock", "MOCK") {
+        _decimals = 18;
+    }
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+    function decimals() public view virtual override returns (uint8) {
+        return _decimals;
+    }
 }
 
 /**
@@ -22,19 +30,19 @@ contract PrivacyBridgeHandler is Test {
     PrivateIntentPool public intentPool;
     PrivateSettlement public settlement;
     MockERC20 public token;
-    
+
     address public relayer;
     address public feeCollector;
     address public currentActor;
-    
+
     uint256 public ghost_totalDeposited;
     uint256 public ghost_totalFilled;
     uint256 public ghost_totalClaimed;
     uint256 public ghost_totalRefunded;
     uint256 public ghost_intentCount;
-    
+
     mapping(bytes32 => bool) public ghost_activeIntents;
-    
+
     constructor(
         PoseidonHasher _poseidon,
         PrivateIntentPool _intentPool,
@@ -49,36 +57,50 @@ contract PrivacyBridgeHandler is Test {
         token = _token;
         relayer = _relayer;
         feeCollector = _feeCollector;
-        
+
         // Fund handler
         token.mint(address(this), 1000000 ether);
         token.approve(address(intentPool), type(uint256).max);
         token.approve(address(settlement), type(uint256).max);
     }
-    
-    function createIntent(uint256 amount, uint256 secretSeed, uint256 nullifierSeed) public {
+
+    function createIntent(
+        uint256 amount,
+        uint256 secretSeed,
+        uint256 nullifierSeed
+    ) public {
         currentActor = msg.sender;
-        
+
         amount = bound(amount, 0.001 ether, 100 ether);
-        
+
         bytes32 secret = keccak256(abi.encodePacked(secretSeed));
         bytes32 nullifier = keccak256(abi.encodePacked(nullifierSeed));
-        bytes32[4] memory inputs = [secret, nullifier, bytes32(amount), bytes32(uint256(1))];
+        bytes32[4] memory inputs = [
+            secret,
+            nullifier,
+            bytes32(amount),
+            bytes32(uint256(1))
+        ];
         bytes32 commitment = poseidon.poseidon(inputs);
-        bytes32 intentId = keccak256(abi.encodePacked(block.timestamp, secretSeed, nullifierSeed));
-        
+        bytes32 intentId = keccak256(
+            abi.encodePacked(block.timestamp, secretSeed, nullifierSeed)
+        );
+
         if (intentPool.isCommitmentUsed(commitment)) {
             return; // Skip duplicate
         }
-        
-        try intentPool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            amount,
-            1,
-            address(this)
-        ) {
+
+        try
+            intentPool.createIntent(
+                intentId,
+                commitment,
+                address(token),
+                amount,
+                1,
+                address(this),
+                0
+            )
+        {
             ghost_totalDeposited += amount;
             ghost_intentCount++;
             ghost_activeIntents[intentId] = true;
@@ -86,48 +108,67 @@ contract PrivacyBridgeHandler is Test {
             // Ignore failures
         }
     }
-    
+
     function fillIntent(bytes32 intentId) public {
         currentActor = msg.sender;
-        
+
         if (!ghost_activeIntents[intentId]) return;
-        
+
         PrivateIntentPool.Intent memory intent = intentPool.getIntent(intentId);
         if (intent.commitment == bytes32(0) || intent.filled) return;
-        
+
         bytes32 sourceRoot = keccak256("root");
-        bytes32[] memory proof = new bytes32[](1);
-        proof[0] = intent.commitment;
-        
-        try settlement.fillIntent(
-            intentId,
-            intent.commitment,
-            1,
-            address(token),
-            intent.amount,
-            sourceRoot,
-            proof,
-            0
-        ) {
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(relayer);
+        settlement.syncSourceChainRoot(1, sourceRoot);
+
+        try
+            settlement.registerIntent(
+                intentId,
+                intent.commitment,
+                address(token),
+                intent.amount,
+                1,
+                intent.deadline,
+                sourceRoot,
+                proof,
+                0
+            )
+        {
+            // Registration succeeded, now fill
+        } catch {
+            return; // Skip if registration fails
+        }
+        try
+            settlement.fillIntent(
+                intentId,
+                intent.commitment,
+                1, // sourceChain
+                address(token),
+                intent.amount
+            )
+        {
             ghost_totalFilled += intent.amount;
         } catch {
             // Ignore failures
         }
     }
-    
+
     function refundIntent(bytes32 intentId) public {
         currentActor = msg.sender;
-        
+
         if (!ghost_activeIntents[intentId]) return;
-        
+
         PrivateIntentPool.Intent memory intent = intentPool.getIntent(intentId);
-        if (intent.commitment == bytes32(0) || intent.filled || intent.refunded) return;
-        
+        if (intent.commitment == bytes32(0) || intent.filled || intent.refunded)
+            return;
+
         // Fast forward if needed
         if (block.timestamp < intent.deadline) {
             vm.warp(intent.deadline + 1);
         }
-        
+
         try intentPool.refund(intentId) {
             ghost_totalRefunded += intent.amount;
             ghost_activeIntents[intentId] = false;
@@ -147,18 +188,39 @@ contract InvariantTest is StdInvariant, Test {
     PrivateIntentPool public intentPool;
     PrivateSettlement public settlement;
     MockERC20 public token;
-    
+
     address public relayer = makeAddr("relayer");
     address public feeCollector = makeAddr("feeCollector");
     address public owner = makeAddr("owner");
-    
+
     function setUp() public {
         // Deploy system
         poseidon = new PoseidonHasher();
-        intentPool = new PrivateIntentPool(owner, relayer, feeCollector, address(poseidon));
-        settlement = new PrivateSettlement(owner, relayer, feeCollector, address(poseidon));
+        intentPool = new PrivateIntentPool(
+            owner,
+            relayer,
+            feeCollector,
+            address(poseidon)
+        );
+        settlement = new PrivateSettlement(
+            owner,
+            relayer,
+            feeCollector,
+            address(poseidon)
+        );
         token = new MockERC20();
-        
+
+        // Add supported tokens with proper parameters
+        vm.startPrank(owner);
+        intentPool.addSupportedToken(
+            address(token),
+            0.01 ether,
+            100 ether, // maxAmount
+            18 // decimals
+        );
+        settlement.addSupportedToken(address(token), 0.01 ether, 100 ether, 18);
+        vm.stopPrank();
+
         // Deploy handler
         handler = new PrivacyBridgeHandler(
             poseidon,
@@ -168,32 +230,36 @@ contract InvariantTest is StdInvariant, Test {
             relayer,
             feeCollector
         );
-        
+
         // Fund relayer
         token.mint(relayer, 1000000 ether);
         vm.prank(relayer);
         token.approve(address(intentPool), type(uint256).max);
-        
+        vm.prank(relayer);
+        token.approve(address(settlement), type(uint256).max);
+
         // Setup handler as target
         targetContract(address(handler));
-        
+
         // Target specific functions
         bytes4[] memory selectors = new bytes4[](3);
         selectors[0] = handler.createIntent.selector;
         selectors[1] = handler.fillIntent.selector;
         selectors[2] = handler.refundIntent.selector;
-        
-        targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
+
+        targetSelector(
+            FuzzSelector({addr: address(handler), selectors: selectors})
+        );
     }
-    
+
     // ========== INVARIANTS ==========
-    
+
     /// @notice Pool should never hold more tokens than total deposits minus claims
     function invariant_PoolBalanceConsistency() public view {
         uint256 poolBalance = token.balanceOf(address(intentPool));
-        uint256 expectedBalance = handler.ghost_totalDeposited() - 
-                                   handler.ghost_totalRefunded();
-        
+        uint256 expectedBalance = handler.ghost_totalDeposited() -
+            handler.ghost_totalRefunded();
+
         // Allow small rounding errors from fees
         assertApproxEqAbs(
             poolBalance,
@@ -202,19 +268,19 @@ contract InvariantTest is StdInvariant, Test {
             "Pool balance should match deposits minus refunds"
         );
     }
-    
+
     /// @notice Settlement should never hold more than filled intents
     function invariant_SettlementBalanceConsistency() public view {
         uint256 settlementBalance = token.balanceOf(address(settlement));
-        uint256 expectedMaxBalance = handler.ghost_totalFilled() - 
-                                      handler.ghost_totalClaimed();
-        
+        uint256 expectedMaxBalance = handler.ghost_totalFilled() -
+            handler.ghost_totalClaimed();
+
         assertTrue(
             settlementBalance <= expectedMaxBalance + 0.01 ether,
             "Settlement balance should not exceed fills minus claims"
         );
     }
-    
+
     /// @notice Nullifiers must be unique (never reused)
     function invariant_NullifierUniqueness() public view {
         // This is enforced by the contract's mapping(bytes32 => bool) nullifiers
@@ -222,27 +288,30 @@ contract InvariantTest is StdInvariant, Test {
         uint256 settlementBalance = token.balanceOf(address(settlement));
         assertTrue(settlementBalance >= 0, "No double-spend possible");
     }
-    
+
     /// @notice Total system value conservation
     function invariant_ValueConservation() public view {
         uint256 poolBalance = token.balanceOf(address(intentPool));
         uint256 settlementBalance = token.balanceOf(address(settlement));
         uint256 handlerBalance = token.balanceOf(address(handler));
         uint256 feeCollectorBalance = token.balanceOf(feeCollector);
-        
-        uint256 totalSystemBalance = poolBalance + settlementBalance + handlerBalance + feeCollectorBalance;
-        
+
+        uint256 totalSystemBalance = poolBalance +
+            settlementBalance +
+            handlerBalance +
+            feeCollectorBalance;
+
         // Total should not exceed initial mint plus new mints
         assertTrue(totalSystemBalance > 0, "System maintains value");
     }
-    
+
     /// @notice Commitments must be unique
     function invariant_CommitmentUniqueness() public view {
         // Enforced by contract's mapping(bytes32 => bool) commitments
         // If we could reuse commitments, we'd have duplicate intents
         assertTrue(handler.ghost_intentCount() >= 0, "Commitments are unique");
     }
-    
+
     /// @notice Poseidon hashes must always be in field
     function invariant_PoseidonFieldSize() public view {
         uint256 fieldSize = poseidon.getFieldSize();
@@ -252,38 +321,38 @@ contract InvariantTest is StdInvariant, Test {
             "Field size must be BN254 prime"
         );
     }
-    
+
     /// @notice Intent pool balance should never be negative
     function invariant_NoNegativeBalance() public view {
         uint256 poolBalance = token.balanceOf(address(intentPool));
         assertTrue(poolBalance >= 0, "Balance cannot be negative");
     }
-    
+
     /// @notice Refunds should only happen for expired, unfilled intents
     function invariant_RefundLogic() public view {
         uint256 totalRefunded = handler.ghost_totalRefunded();
         uint256 totalDeposited = handler.ghost_totalDeposited();
-        
+
         assertTrue(
             totalRefunded <= totalDeposited,
             "Cannot refund more than deposited"
         );
     }
-    
+
     /// @notice Merkle tree size should match number of fills
     function invariant_MerkleTreeSize() public view {
         uint256 treeSize = settlement.getFillTreeSize();
         assertTrue(treeSize >= 0, "Tree size should be non-negative");
     }
-    
+
     /// @notice Fee collector should receive fees
     function invariant_FeeCollection() public view {
         uint256 feeBalance = token.balanceOf(feeCollector);
         assertTrue(feeBalance >= 0, "Fee collector should have balance");
     }
-    
+
     // ========== CALL SUMMARY ==========
-    
+
     function invariant_callSummary() public view {
         console.log("\n=== Invariant Test Summary ===");
         console.log("Total intents created:", handler.ghost_intentCount());

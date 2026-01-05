@@ -1,6 +1,6 @@
 import { createAppKit } from "@reown/appkit/react"
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi"
-import { mantle, mainnet, sepolia } from "@reown/appkit/networks"
+import { sepolia } from "@reown/appkit/networks"
 import { QueryClient } from "@tanstack/react-query"
 import { defineChain } from "viem"
 
@@ -37,8 +37,8 @@ const mantleSepoliaTestnet = defineChain({
   testnet: true,
 })
 
-// Configure all supported networks (both mainnet and testnet)
-export const networks = [mantle, mantleSepoliaTestnet, mainnet, sepolia]
+// Configure supported testnets only
+export const networks = [mantleSepoliaTestnet, sepolia]
 
 // Metadata for the app
 const metadata = {
@@ -61,7 +61,7 @@ export const wagmiAdapter = new WagmiAdapter({
 // Create AppKit instance
 export const modal = createAppKit({
   adapters: [wagmiAdapter],
-  networks,
+  networks: [mantleSepoliaTestnet, sepolia],
   projectId,
   metadata,
   features: {

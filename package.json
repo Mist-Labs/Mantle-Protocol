@@ -4,9 +4,10 @@
   "description": "Mantle protocol workspace",
   "private": true,
   "main": "index.js",
-  "repository": "https://github.com/OkoliEvans/Mantle.git",
+  "repository": "https://github.com/Mist-Labs/Mantle-Protocol.git",
   "author": "Mist-Labs",
   "license": "MIT",
+  "packageManager": "yarn@1.22.22",
   "scripts": {
     "dev": "echo 'Run specific package scripts: yarn workspace <name> <script>'"
   },

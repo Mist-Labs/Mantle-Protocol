@@ -1,2 +1,2 @@
-pub mod merkletreemanager;
+pub mod merkle_manager;
 pub mod model;

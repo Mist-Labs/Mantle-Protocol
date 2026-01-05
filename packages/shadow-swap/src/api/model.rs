@@ -19,6 +19,10 @@ pub struct InitiateBridgeRequest {
     pub amount: String,
     pub commitment: String,
     pub refund_address: String,
+    pub secret: String,
+    pub nullifier: String,
+    pub claim_auth: String,
+    pub recipient: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,19 +60,13 @@ pub struct IntentStatusResponse {
 pub struct IndexerEventRequest {
     pub event_type: String,
     pub chain: String,
+    pub chain_id: u64,
     pub transaction_hash: String,
-    pub block_number: Option<u64>,
+    pub block_number: u64,
+    pub log_index: u64,
+    pub contract_address: String,
     pub timestamp: i64,
-
-    // Intent-related fields
-    pub intent_id: Option<String>,
-    pub commitment: Option<String>,
-    pub nullifier: Option<String>,
-    pub solver: Option<String>,
-
-    // Root sync fields
-    pub root: Option<String>,
-    pub dest_chain_id: Option<u32>,
+    pub event_data: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]

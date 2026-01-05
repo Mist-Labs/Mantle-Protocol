@@ -8,7 +8,7 @@ use ethers::{
     signers::{LocalWallet, Signer},
     types::{Address, Bytes, U256},
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     database::database::Database,
@@ -22,20 +22,26 @@ pub mod mantle_contracts {
         MantleIntentPool,
         r#"[
             function createIntent(bytes32 intentId, bytes32 commitment, address token, uint256 amount, uint32 destChain, address refundTo, bytes32 secret, bytes32 nullifier) external
-            function markFilled(bytes32 intentId, bytes32[] calldata merkleProof, uint256 leafIndex) external
+            function markFilled(bytes32 intentId, address solver, bytes32[] calldata merkleProof, uint256 leafIndex) external
             function syncDestChainRoot(uint32 chainId, bytes32 root) external
             function refund(bytes32 intentId) external
+            function generateCommitmentProof(bytes32 commitment) external view returns (bytes32[] memory, uint256)
+            function getCommitmentRoot() external view returns (bytes32)
         ]"#
     );
 
     abigen!(
         MantleSettlement,
         r#"[
-            function fillIntent(bytes32 intentId, bytes32 commitment, uint32 sourceChain, address token, uint256 amount, bytes32 sourceRoot, bytes32[] calldata merkleProof, uint256 leafIndex) external
+            function registerIntent(bytes32 intentId, bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bytes32 sourceRoot, bytes32[] calldata proof, uint256 leafIndex) external
+            function fillIntent(bytes32 intentId, bytes32 commitment, uint32 sourceChain, address token, uint256 amount) external payable
             function claimWithdrawal(bytes32 intentId, bytes32 nullifier, address recipient, bytes32 secret, bytes calldata claimAuth) external
             function syncSourceChainRoot(uint32 chainId, bytes32 root) external
             function getMerkleRoot() external view returns (bytes32)
-        ]"#
+            function generateFillProof(bytes32 intentId) external view returns (bytes32[] memory)
+            function getFillTreeSize() external view returns (uint256)
+            function getFill(bytes32 intentId) external view returns (tuple(address solver, address token, uint256 amount, uint32 sourceChain, uint32 timestamp, bool claimed))
+       ]"#
     );
 }
 
@@ -182,18 +188,19 @@ impl MantleRelayer {
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
-    pub async fn fill_intent(
+    pub async fn register_intent(
         &self,
         intent_id: &str,
         commitment: &str,
-        source_chain: u32,
         token: &str,
         amount: &str,
+        source_chain: u32,
+        deadline: u64,
         source_root: &str,
         merkle_path: &[String],
         leaf_index: u32,
     ) -> Result<String> {
-        info!("🔨 Filling intent on Mantle");
+        info!("📝 Registering intent on Mantle Settlement");
 
         let intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
             .map_err(|e| anyhow!("Invalid intent_id hex: {}", e))?
@@ -216,18 +223,82 @@ impl MantleRelayer {
             .map_err(|e| anyhow!("Invalid root hex: {}", e))?
             .try_into()
             .map_err(|_| anyhow!("Invalid root length"))?;
-
         let proof: Vec<[u8; 32]> = merkle_path
             .iter()
             .map(|p| {
-                let decoded =
-                    hex::decode(&p[2..]).map_err(|e| anyhow!("Invalid proof hex: {}", e))?;
+                let decoded = hex::decode(&p[2..])?;
                 let array: [u8; 32] = decoded
                     .try_into()
-                    .map_err(|_| anyhow!("Invalid proof element length"))?;
+                    .map_err(|_| anyhow!("Invalid proof length"))?;
                 Ok(array)
             })
             .collect::<Result<Vec<[u8; 32]>>>()?;
+
+        let tx = self.settlement.register_intent(
+            intent_id_bytes,
+            commitment_bytes,
+            token_address,
+            amount_u256,
+            source_chain,
+            deadline,
+            source_root_bytes,
+            proof,
+            U256::from(leaf_index),
+        );
+
+        let pending = tx.send().await?;
+        let tx_hash = format!("{:?}", pending.tx_hash());
+
+        info!("📤 Register intent tx sent: {}", tx_hash);
+
+        self.log_transaction(intent_id, "register_intent", &tx_hash, "pending")
+            .await?;
+
+        let receipt = pending
+            .await?
+            .ok_or_else(|| anyhow!("Transaction dropped"))?;
+
+        let status = if receipt.status == Some(1.into()) {
+            "confirmed"
+        } else {
+            "reverted"
+        };
+        self.log_transaction(intent_id, "register_intent", &tx_hash, status)
+            .await?;
+
+        if receipt.status != Some(1.into()) {
+            return Err(anyhow!("Transaction reverted"));
+        }
+
+        Ok(format!("{:?}", receipt.transaction_hash))
+    }
+
+    pub async fn execute_fill_intent(
+        &self,
+        intent_id: &str,
+        commitment: &str,
+        source_chain: u32,
+        token: &str,
+        amount: &str,
+    ) -> Result<String> {
+        info!("🔨 Filling intent on Mantle (solver action)");
+
+        let intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
+            .map_err(|e| anyhow!("Invalid intent_id hex: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid intent_id length"))?;
+
+        let commitment_bytes: [u8; 32] = hex::decode(&commitment[2..])
+            .map_err(|e| anyhow!("Invalid commitment hex: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid commitment length"))?;
+
+        let token_address: Address = token
+            .parse()
+            .map_err(|e| anyhow!("Invalid token address: {}", e))?;
+
+        let amount_u256 =
+            U256::from_dec_str(amount).map_err(|e| anyhow!("Invalid amount: {}", e))?;
 
         let tx = self.settlement.fill_intent(
             intent_id_bytes,
@@ -235,9 +306,6 @@ impl MantleRelayer {
             source_chain,
             token_address,
             amount_u256,
-            source_root_bytes,
-            proof,
-            U256::from(leaf_index),
         );
 
         let pending = tx
@@ -341,9 +409,10 @@ impl MantleRelayer {
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
-    pub async fn mark_filled(
+    pub async fn execute_mark_filled(
         &self,
         intent_id: &str,
+        solver_address: &str,
         merkle_path: &[String],
         leaf_index: u32,
     ) -> Result<String> {
@@ -366,9 +435,13 @@ impl MantleRelayer {
             })
             .collect::<Result<Vec<[u8; 32]>>>()?;
 
+        let solver_addr: Address = solver_address
+            .parse()
+            .map_err(|e| anyhow!("Invalid solver address: {}", e))?;
+
         let tx = self
             .intent_pool
-            .mark_filled(intent_id_bytes, proof, U256::from(leaf_index));
+            .mark_filled(intent_id_bytes, solver_addr, proof, U256::from(leaf_index));
 
         let pending = tx
             .send()
@@ -402,7 +475,7 @@ impl MantleRelayer {
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
-    pub async fn refund_intent(&self, intent_id: &str) -> Result<String> {
+    pub async fn execute_refund(&self, intent_id: &str) -> Result<String> {
         info!("♻️ Refunding intent on Mantle");
 
         let intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
@@ -456,7 +529,59 @@ impl MantleRelayer {
             .map_err(|e| anyhow!("Failed to log transaction: {}", e))
     }
 
-    pub async fn get_merkle_root(&self) -> Result<String> {
+    pub async fn get_commitment_proof(&self, commitment: &str) -> Result<(Vec<String>, u32)> {
+        let commitment_bytes: [u8; 32] = hex::decode(&commitment[2..])
+            .map_err(|e| anyhow!("Invalid commitment hex: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid commitment length"))?;
+
+        let (proof, leaf_index) = self
+            .intent_pool
+            .generate_commitment_proof(commitment_bytes)
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get commitment proof: {}", e))?;
+
+        Ok((
+            proof
+                .iter()
+                .map(|p| format!("0x{}", hex::encode(p)))
+                .collect(),
+            leaf_index.as_u32(),
+        ))
+    }
+
+    pub async fn get_commitment_root(&self) -> Result<String> {
+        let root = self
+            .intent_pool
+            .get_commitment_root()
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get commitment root from IntentPool: {}", e))?;
+
+        Ok(format!("0x{}", hex::encode(root)))
+    }
+
+    pub async fn get_fill_proof(&self, intent_id: &str) -> Result<Vec<String>> {
+        let intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
+            .map_err(|e| anyhow!("Invalid intent_id hex: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid intent_id length"))?;
+
+        let proof = self
+            .settlement
+            .generate_fill_proof(intent_id_bytes)
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get fill proof: {}", e))?;
+
+        Ok(proof
+            .iter()
+            .map(|p| format!("0x{}", hex::encode(p)))
+            .collect())
+    }
+
+    pub async fn get_fill_root(&self) -> Result<String> {
         let root = self
             .settlement
             .get_merkle_root()
@@ -467,8 +592,37 @@ impl MantleRelayer {
         Ok(format!("0x{}", hex::encode(root)))
     }
 
-    pub async fn sync_source_chain_root(&self, chain_id: u32, root: String) -> Result<String> {
+    pub async fn get_fill_index(&self, intent_id: &str) -> Result<u32> {
+        let _intent_id_bytes: [u8; 32] = hex::decode(&intent_id[2..])
+            .map_err(|e| anyhow!("Invalid intent_id hex: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid intent_id length"))?;
+
+        let tree_size = self
+            .settlement
+            .get_fill_tree_size()
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get tree size: {}", e))?;
+
+        Ok((tree_size.as_u64() - 1) as u32)
+    }
+
+    pub async fn get_fill_merkle_root(&self) -> Result<String> {
+        let root = self
+            .settlement
+            .get_merkle_root()
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get merkle root: {}", e))?;
+
+        Ok(format!("0x{}", hex::encode(root)))
+    }
+
+    pub async fn sync_source_root_tx(&self, chain_id: u32, root: String) -> Result<String> {
         info!("🌳 Syncing source chain {} root on Mantle", chain_id);
+
+        self.check_balance().await?;
 
         let root_bytes: [u8; 32] = hex::decode(&root[2..])
             .map_err(|e| anyhow!("Invalid root hex: {}", e))?
@@ -496,8 +650,31 @@ impl MantleRelayer {
         Ok(tx_hash)
     }
 
-    pub async fn sync_dest_chain_root(&self, chain_id: u32, root: [u8; 32]) -> Result<String> {
+    pub async fn check_balance(&self) -> Result<U256> {
+        let signer = self.client.signer();
+        let address = signer.address();
+
+        let balance = self.client.get_balance(address, None).await?;
+
+        info!(
+            "💰 Mantle Relayer balance: {} MNT",
+            ethers::utils::format_ether(balance)
+        );
+
+        if balance < ethers::utils::parse_ether("0.5")? {
+            warn!(
+                "⚠️  Low MNT balance! Please fund relayer account: {:?}",
+                address
+            );
+        }
+
+        Ok(balance)
+    }
+
+    pub async fn sync_dest_root_tx(&self, chain_id: u32, root: [u8; 32]) -> Result<String> {
         info!("🌳 Syncing dest chain {} root on Mantle", chain_id);
+
+        self.check_balance().await?;
 
         let tx = self.intent_pool.sync_dest_chain_root(chain_id, root);
 
@@ -526,7 +703,11 @@ use crate::models::traits::ChainRelayer;
 
 impl ChainRelayer for MantleRelayer {
     fn get_merkle_root(&self) -> impl std::future::Future<Output = Result<String>> + Send {
-        async move { self.get_merkle_root().await.map_err(|e| anyhow::anyhow!(e)) }
+        async move {
+            self.get_fill_merkle_root()
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
+        }
     }
 
     fn sync_source_chain_root(
@@ -535,7 +716,7 @@ impl ChainRelayer for MantleRelayer {
         root: String,
     ) -> impl std::future::Future<Output = Result<String>> + Send {
         async move {
-            self.sync_source_chain_root(chain_id, root)
+            self.sync_source_root_tx(chain_id, root)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
@@ -547,7 +728,7 @@ impl ChainRelayer for MantleRelayer {
         root: [u8; 32],
     ) -> impl std::future::Future<Output = Result<String>> + Send {
         async move {
-            self.sync_dest_chain_root(chain_id, root)
+            self.sync_dest_root_tx(chain_id, root)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
@@ -560,30 +741,16 @@ impl ChainRelayer for MantleRelayer {
         source_chain: u32,
         token: &str,
         amount: &str,
-        source_root: &str,
-        merkle_path: &[String],
-        leaf_index: u32,
     ) -> impl std::future::Future<Output = Result<String>> + Send {
         let intent_id = intent_id.to_string();
         let commitment = commitment.to_string();
         let token = token.to_string();
         let amount = amount.to_string();
-        let source_root = source_root.to_string();
-        let merkle_path = merkle_path.to_vec();
 
         async move {
-            self.fill_intent(
-                &intent_id,
-                &commitment,
-                source_chain,
-                &token,
-                &amount,
-                &source_root,
-                &merkle_path,
-                leaf_index,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!(e))
+            self.execute_fill_intent(&intent_id, &commitment, source_chain, &token, &amount)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
         }
     }
 
@@ -611,6 +778,7 @@ impl ChainRelayer for MantleRelayer {
     fn mark_filled(
         &self,
         intent_id: &str,
+        solver_address: &str,
         merkle_path: &[String],
         leaf_index: u32,
     ) -> impl std::future::Future<Output = Result<String>> + Send {
@@ -618,7 +786,7 @@ impl ChainRelayer for MantleRelayer {
         let merkle_path = merkle_path.to_vec();
 
         async move {
-            self.mark_filled(&intent_id, &merkle_path, leaf_index)
+            self.execute_mark_filled(&intent_id, solver_address, &merkle_path, leaf_index)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
@@ -631,7 +799,7 @@ impl ChainRelayer for MantleRelayer {
         let intent_id = intent_id.to_string();
 
         async move {
-            self.refund_intent(&intent_id)
+            self.execute_refund(&intent_id)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
