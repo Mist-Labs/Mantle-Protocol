@@ -18,8 +18,14 @@ contract VeilToken is ERC20, ReentrancyGuard {
     mapping(bytes32 => bool) public commitments;
     mapping(bytes32 => bool) public nullifiers;
     
-    // Track commitment amounts (for MVP simplicity)
+    // Track commitment amounts and locked tokens
     mapping(bytes32 => uint256) public commitmentAmounts;
+    
+    // Track total locked tokens for private transfers
+    uint256 public totalLocked;
+    
+    // Access control for minting
+    address public minter;
 
     // Events
     event PrivateTransfer(
@@ -49,6 +55,7 @@ contract VeilToken is ERC20, ReentrancyGuard {
     ) ERC20(name, symbol) {
         require(_verifier != address(0), "Invalid verifier");
         verifier = Verifier(_verifier);
+        minter = msg.sender;
     }
 
     /**
@@ -66,11 +73,11 @@ contract VeilToken is ERC20, ReentrancyGuard {
 
     /**
      * @notice Private transfer using commitments
-     * @dev For MVP: commitment = Poseidon(amount, blinding, recipient, nonce)
+     * @dev commitment = Poseidon(amount, blinding, recipient, nonce)
      * @param commitment The commitment hash
      * @param nullifier The nullifier hash (prevents double-spend)
-     * @param amount The transfer amount (public for MVP simplicity)
-     * @param proof The proof data (for MVP: simple hash verification)
+     * @param amount The transfer amount
+     * @param proof The proof data - must contain commitment inputs for verification
      */
     function privateTransfer(
         bytes32 commitment,
@@ -84,21 +91,31 @@ contract VeilToken is ERC20, ReentrancyGuard {
         // Verify commitment hasn't been spent
         require(!commitments[commitment], "Commitment already spent");
         
-        // For MVP: Simple proof verification
-        // In production, this would verify a zkSNARK proof
-        require(proof.length > 0, "Invalid proof");
+        // Verify proof contains valid commitment inputs (128 bytes = 4 * 32 bytes)
+        require(proof.length >= 128, "Invalid proof length");
         
-        // Mark commitment as spent
+        // Decode proof to get commitment inputs using abi.decode
+        bytes32[4] memory inputs = abi.decode(proof, (bytes32[4]));
+        
+        // Verify commitment matches the inputs
+        bytes32 computedCommitment = verifier.verifyCommitment(inputs);
+        require(computedCommitment == commitment, "Invalid commitment proof");
+        
+        // Verify amount matches
+        require(uint256(inputs[0]) == amount, "Amount mismatch");
+        
+        // Lock tokens from sender
+        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+        _transfer(msg.sender, address(this), amount);
+        totalLocked += amount;
+        
+        // Mark commitment as created (not spent yet - will be spent on claim)
         commitments[commitment] = true;
         commitmentAmounts[commitment] = amount;
         
         // Mark nullifier as used
         nullifiers[nullifier] = true;
 
-        // For MVP: We don't actually transfer here
-        // The actual transfer happens when recipient claims
-        // This is a simplified model - in production, you'd have a more sophisticated system
-        
         emit PrivateTransfer(commitment, nullifier, msg.sender);
     }
 
@@ -107,7 +124,7 @@ contract VeilToken is ERC20, ReentrancyGuard {
      * @dev Recipient proves knowledge of the commitment secret to claim
      * @param commitment The commitment hash
      * @param amount The amount to claim
-     * @param proof The proof that the caller knows the commitment secret
+     * @param proof The proof containing commitment inputs [amount, blinding, recipient, nonce]
      */
     function claimFromCommitment(
         bytes32 commitment,
@@ -118,19 +135,31 @@ contract VeilToken is ERC20, ReentrancyGuard {
         require(commitments[commitment], "Commitment not found");
         require(commitmentAmounts[commitment] == amount, "Amount mismatch");
         
-        // For MVP: Simple proof check
-        // In production, this would verify a Merkle proof or zkSNARK
-        require(proof.length > 0, "Invalid proof");
+        // Verify proof contains valid commitment inputs (128 bytes = 4 * 32 bytes)
+        require(proof.length >= 128, "Invalid proof length");
         
-        // Verify the commitment can be reconstructed (simplified for MVP)
-        // In production, you'd verify a zkSNARK proof that the caller knows the secret
+        // Decode proof to get commitment inputs using abi.decode
+        bytes32[4] memory inputs = abi.decode(proof, (bytes32[4]));
+        
+        // Verify commitment matches the inputs
+        bytes32 computedCommitment = verifier.verifyCommitment(inputs);
+        require(computedCommitment == commitment, "Invalid commitment proof");
+        
+        // Verify amount matches
+        require(uint256(inputs[0]) == amount, "Amount mismatch");
+        
+        // Verify recipient matches (the caller must be the intended recipient)
+        address intendedRecipient = address(uint160(uint256(inputs[2])));
+        require(intendedRecipient == msg.sender, "Not authorized to claim");
         
         // Mark commitment as spent (prevent double-claim)
         delete commitments[commitment];
         delete commitmentAmounts[commitment];
         
-        // Transfer tokens to the claimer
-        _mint(msg.sender, amount);
+        // Transfer locked tokens to the claimer (not minting)
+        require(totalLocked >= amount, "Insufficient locked balance");
+        totalLocked -= amount;
+        _transfer(address(this), msg.sender, amount);
         
         emit CommitmentClaimed(commitment, msg.sender, amount);
     }
@@ -177,14 +206,24 @@ contract VeilToken is ERC20, ReentrancyGuard {
     }
 
     /**
-     * @notice Mint tokens (for testing/initial supply)
+     * @notice Mint tokens (restricted to minter)
      * @param to Address to mint to
      * @param amount Amount to mint
      */
     function mint(address to, uint256 amount) external {
-        // For MVP: Allow anyone to mint (for testing)
-        // In production, this would be restricted to authorized minters
+        require(msg.sender == minter, "Only minter");
+        require(to != address(0), "Cannot mint to zero address");
         _mint(to, amount);
+    }
+    
+    /**
+     * @notice Set new minter address
+     * @param _minter New minter address
+     */
+    function setMinter(address _minter) external {
+        require(msg.sender == minter, "Only minter");
+        require(_minter != address(0), "Invalid minter");
+        minter = _minter;
     }
 }
 
