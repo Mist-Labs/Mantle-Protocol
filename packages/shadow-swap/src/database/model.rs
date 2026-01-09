@@ -9,7 +9,7 @@ use crate::models::{
     schema::{
         bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
         intent_privacy_params, intents, mantle_sepolia_intent_created, merkle_nodes, merkle_roots,
-        merkle_tree_ethereum_commitments, merkle_trees,
+        merkle_tree_ethereum_commitments, merkle_trees, root_syncs,
     },
 };
 
@@ -35,7 +35,9 @@ pub struct DbIntent {
     pub updated_at: DateTime<Utc>,
     pub deadline: i64,
     pub refund_address: Option<String>,
-    pub solver_address: Option<String>
+    pub solver_address: Option<String>,
+    pub block_number: Option<i64>,
+    pub log_index: Option<i32>,
 }
 
 #[derive(Insertable)]
@@ -59,6 +61,8 @@ pub struct NewIntent<'a> {
     pub deadline: i64,
     pub refund_address: Option<&'a str>,
     pub solver_address: Option<&'a str>,
+    pub block_number: Option<i64>,
+    pub log_index: Option<i32>,
 }
 
 // ==================== Intent Privacy Params ====================
@@ -285,6 +289,15 @@ pub struct NewEthereumIntentCreated {
 }
 
 #[derive(Insertable)]
+#[diesel(table_name = root_syncs)]
+pub struct NewRootSync<'a> {
+    pub sync_type: &'a str,
+    pub root: &'a str,
+    pub tx_hash: &'a str,
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Insertable)]
 #[diesel(table_name = mantle_sepolia_intent_created)]
 pub struct NewMantleIntentCreated {
     pub event_data: serde_json::Value,
@@ -304,6 +317,7 @@ impl IntentStatus {
             Self::SolverPaid => "solver_paid",
             Self::Refunded => "refunded",
             Self::Failed => "failed",
+            Self::Expired => "expired",
         }
     }
 
@@ -344,6 +358,8 @@ impl From<DbIntent> for Intent {
             deadline: db.deadline as u64,
             refund_address: db.refund_address,
             solver_address: db.solver_address,
+            block_number: db.block_number,
+            log_index: db.log_index,
         }
     }
 }
@@ -369,6 +385,8 @@ impl<'a> From<&'a Intent> for NewIntent<'a> {
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
             solver_address: intent.solver_address.as_deref(),
+            block_number: intent.block_number,
+            log_index: intent.log_index,
         }
     }
 }

@@ -11,6 +11,7 @@ use crate::database::model::BridgeStats;
 
 #[derive(Debug, Deserialize)]
 pub struct InitiateBridgeRequest {
+    pub intent_id: String,
     pub user_address: String,
     pub source_chain: String,
     pub dest_chain: String,
@@ -19,8 +20,8 @@ pub struct InitiateBridgeRequest {
     pub amount: String,
     pub commitment: String,
     pub refund_address: String,
-    pub secret: String,
-    pub nullifier: String,
+    pub encrypted_secret: String,
+    pub encrypted_nullifier: String,
     pub claim_auth: String,
     pub recipient: String,
 }
@@ -60,13 +61,11 @@ pub struct IntentStatusResponse {
 pub struct IndexerEventRequest {
     pub event_type: String,
     pub chain: String,
-    pub chain_id: u64,
     pub transaction_hash: String,
     pub block_number: u64,
-    pub log_index: u64,
-    pub contract_address: String,
-    pub timestamp: i64,
     pub event_data: serde_json::Value,
+    #[serde(default)]
+    pub log_index: u32,
 }
 
 #[derive(Debug, Serialize)]

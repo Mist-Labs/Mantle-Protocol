@@ -1,14 +1,15 @@
 mod api;
 mod config;
 mod database;
+mod encryption;
 mod ethereum;
+mod intent_workers;
 mod mantle;
 mod merkle_manager;
 mod models;
 mod pricefeed;
 mod relay_coordinator;
 mod root_sync_coordinator;
-mod encryption;
 
 use std::sync::Arc;
 
@@ -20,6 +21,10 @@ use tracing::{error, info};
 
 use crate::{
     database::database::Database,
+    intent_workers::{
+        intent_registration_worker::IntentRegistrationWorker,
+        intent_settlement_worker::IntentSettlementWorker,
+    },
     merkle_manager::merkle_manager::MerkleTreeManager,
     models::model::BridgeConfig,
     pricefeed::pricefeed::PriceFeedManager,
@@ -101,14 +106,22 @@ async fn main() -> Result<()> {
         database.clone(),
         ethereum_relayer.clone(),
         mantle_relayer.clone(),
-        180,
+        10,
+    ));
+
+    info!("🔄 Initializing intent sync service");
+    let intent_sync_service = Arc::new(intent_workers::event_sync::IntentSyncService::new(
+        database.clone(),
+        mantle_relayer.clone(),
+        ethereum_relayer.clone(),
+        merkle_manager.clone(),
     ));
 
     let app_state = web::Data::new(AppState {
-        database,
+        database: database.clone(),
         config: config.clone(),
-        ethereum_relayer,
-        mantle_relayer,
+        ethereum_relayer: ethereum_relayer.clone(),
+        mantle_relayer: mantle_relayer.clone(),
         bridge_coordinator: bridge_coordinator.clone(),
         merkle_manager: merkle_manager.clone(),
         price_feed,
@@ -125,6 +138,54 @@ async fn main() -> Result<()> {
         }
     });
 
+    let should_sync_on_startup = std::env::var("SYNC_ON_STARTUP")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false);
+
+    if should_sync_on_startup {
+        info!("🔄 Performing initial sync on startup");
+
+        let ethereum_from_block = std::env::var("ETHEREUM_SYNC_FROM_BLOCK")
+            .unwrap_or_else(|_| "9995018".to_string())
+            .parse::<u64>()
+            .context("Invalid ETHEREUM_SYNC_FROM_BLOCK")?;
+
+        let mantle_from_block = std::env::var("MANTLE_SYNC_FROM_BLOCK")
+            .unwrap_or_else(|_| "33084800".to_string())
+            .parse::<u64>()
+            .context("Invalid MANTLE_SYNC_FROM_BLOCK")?;
+
+        // --- Ethereum Sync ---
+        info!("  Syncing Ethereum from block {}", ethereum_from_block);
+        if let Err(e) = intent_sync_service
+            .resync_ethereum_intents(ethereum_from_block, true)
+            .await
+        {
+            error!("❌ Ethereum sync failed: {}", e);
+        }
+
+        // --- Mantle Sync ---
+        info!("  Syncing Mantle from block {}", mantle_from_block);
+        if let Err(e) = intent_sync_service
+            .resync_mantle_intents(mantle_from_block, true)
+            .await
+        {
+            error!("❌ Mantle sync failed: {}", e);
+        }
+
+        // --- Final Verification ---
+        info!("🔍 Running final verification post-sync...");
+        if let Err(e) = intent_sync_service.verify_sync_status().await {
+            error!(
+                "❌ Post-sync verification failed! Roots still do not match: {}",
+                e
+            );
+        } else {
+            info!("✅ Post-sync verification successful. All roots are consistent.");
+        }
+    }
+
     info!("⚙️  Starting bridge coordinator service");
     let coordinator_handle = task::spawn({
         let coordinator = bridge_coordinator.clone();
@@ -140,6 +201,36 @@ async fn main() -> Result<()> {
         let coordinator = root_sync_coordinator.clone();
         async move {
             coordinator.run().await;
+        }
+    });
+
+    info!("📝 Starting intent registration worker");
+    let registration_worker = Arc::new(IntentRegistrationWorker::new(
+        database.clone(),
+        mantle_relayer.clone(),
+        ethereum_relayer.clone(),
+        merkle_manager.clone(),
+        root_sync_coordinator.clone(),
+    ));
+
+    let registration_handle = task::spawn({
+        let worker = registration_worker.clone();
+        async move {
+            worker.run().await;
+        }
+    });
+
+    info!("💰 Starting intent settlement worker");
+    let settlement_worker = Arc::new(IntentSettlementWorker::new(
+        database.clone(),
+        mantle_relayer.clone(),
+        ethereum_relayer.clone(),
+    ));
+
+    let settlement_handle = task::spawn({
+        let worker = settlement_worker.clone();
+        async move {
+            worker.run().await;
         }
     });
 
@@ -180,6 +271,8 @@ async fn main() -> Result<()> {
         _ = tree_manager_handle => error!("Merkle Tree Manager stopped unexpectedly"),
         _ = coordinator_handle => error!("Bridge coordinator stopped unexpectedly"),
         _ = root_sync_handle => error!("Root sync coordinator stopped unexpectedly"),
+        _ = registration_handle => error!("Intent registration worker stopped unexpectedly"),
+        _ = settlement_handle => error!("Intent settlement worker stopped unexpectedly"),
     }
 
     Ok(())

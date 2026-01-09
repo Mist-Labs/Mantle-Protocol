@@ -75,7 +75,9 @@ pub struct Intent {
     pub updated_at: DateTime<Utc>,
     pub deadline: u64,
     pub refund_address: Option<String>,
-    pub solver_address: Option<String>
+    pub solver_address: Option<String>,
+    pub block_number: Option<i64>,
+    pub log_index: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +101,22 @@ pub enum IntentStatus {
     UserClaimed,
     Refunded,
     Failed,
+    Expired,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntentCreatedEvent {
+    pub intent_id: String,
+    pub commitment: String,
+    pub source_token: String,
+    pub source_amount: String,
+    pub dest_token: String,
+    pub dest_amount: String,
+    pub dest_chain: u32,
+    pub deadline: Option<u64>,
+    pub block_number: Option<u64>,
+    pub transaction_hash: Option<String>,
+    pub log_index: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,3 +168,53 @@ pub enum TokenType {
     WETH,
     MNT
 }
+
+// #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// pub enum Chain {
+//     Ethereum,
+//     Mantle,
+// }
+
+// #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// pub enum TreeType {
+//     Intent,
+//     Commitment,
+//     Fill,
+// }
+
+// impl Chain {
+//     pub fn from_str(s: &str) -> Option<Self> {
+//         match s.to_lowercase().as_str() {
+//             "ethereum" => Some(Self::Ethereum),
+//             "mantle" => Some(Self::Mantle),
+//             _ => None,
+//         }
+//     }
+
+//     pub fn as_str(&self) -> &'static str {
+//         match self {
+//             Self::Ethereum => "ethereum",
+//             Self::Mantle => "mantle",
+//         }
+//     }
+
+//     pub fn chain_id(&self) -> u32 {
+//         match self {
+//             Self::Ethereum => 11155111,
+//             Self::Mantle => 5003,
+//         }
+//     }
+// }
+
+// impl TreeType {
+//     pub fn tree_name(&self, chain: Chain) -> String {
+//         match (chain, self) {
+//             (Chain::Ethereum, TreeType::Intent) => "ethereum_intents".to_string(),
+//             (Chain::Ethereum, TreeType::Commitment) => "ethereum_commitments".to_string(),
+//             (Chain::Ethereum, TreeType::Fill) => "ethereum_fills".to_string(),
+//             (Chain::Mantle, TreeType::Intent) => "mantle_intents".to_string(),
+//             (Chain::Mantle, TreeType::Commitment) => "mantle_commitments".to_string(),
+//             (Chain::Mantle, TreeType::Fill) => "mantle_fills".to_string(),
+//         }
+//     }
+// }

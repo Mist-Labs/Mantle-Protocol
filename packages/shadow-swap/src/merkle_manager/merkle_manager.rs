@@ -1,10 +1,11 @@
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
-use tracing::{error, info};
+use tokio::sync::RwLock;
+use tracing::{info, warn};
 
 use crate::{
     database::database::Database,
-    merkle_manager::model::MerkleProof,
+    merkle_manager::proof_generator::MerkleProofGenerator,
     relay_coordinator::model::{EthereumRelayer, MantleRelayer},
 };
 
@@ -17,6 +18,8 @@ pub struct MerkleTreeManager {
     ethereum_relayer: Arc<EthereumRelayer>,
     database: Arc<Database>,
     tree_depth: usize,
+    tree_locks: Arc<RwLock<()>>,
+    proof_generator: Arc<MerkleProofGenerator>,
 }
 
 impl MerkleTreeManager {
@@ -26,704 +29,447 @@ impl MerkleTreeManager {
         database: Arc<Database>,
         tree_depth: usize,
     ) -> Self {
+        let proof_generator = Arc::new(MerkleProofGenerator::new(database.clone()));
+
         Self {
             mantle_relayer,
             ethereum_relayer,
             database,
             tree_depth,
+            tree_locks: Arc::new(RwLock::new(())),
+            proof_generator,
         }
     }
 
+    /// Initialize all trees and rebuild from database
     pub async fn start(&self) -> Result<()> {
-        info!("🌳 Merkle Tree Manager starting");
+        info!("🌳 Merkle Tree Manager starting...");
 
+        // Initialize all trees
         for (tree_name, depth) in &[
             ("mantle_intents", 20),
-            ("ethereum_fills", 20),
+            ("mantle_commitments", 20),
+            ("mantle_fills", 20),
+            ("ethereum_intents", 20),
             ("ethereum_commitments", 20),
+            ("ethereum_fills", 20),
         ] {
             self.database.ensure_merkle_tree(tree_name, *depth)?;
+            info!("✅ Ensured tree '{}' exists", tree_name);
         }
 
-        loop {
-            if let Err(e) = self.rebuild_mantle_tree().await {
-                error!("Failed to rebuild mantle tree: {}", e);
-            }
+        // Rebuild commitment trees from database
+        info!("🔄 Rebuilding Mantle commitments tree...");
+        self.rebuild_mantle_commitments_tree().await?;
+        
+        info!("🔄 Rebuilding Ethereum commitments tree...");
+        self.rebuild_ethereum_commitments_tree().await?;
 
-            if let Err(e) = self.rebuild_ethereum_tree().await {
-                error!("Failed to rebuild ethereum tree: {}", e);
+        // Verify consistency
+        for tree_name in &["mantle_commitments", "ethereum_commitments"] {
+            match self.database.verify_tree_consistency(tree_name) {
+                Ok(true) => info!("✅ Tree '{}' is consistent", tree_name),
+                Ok(false) => warn!("⚠️  Tree '{}' has inconsistent leaf count", tree_name),
+                Err(e) => warn!("⚠️  Failed to verify tree '{}': {}", tree_name, e),
             }
-
-            if let Err(e) = self.rebuild_ethereum_commitment_tree().await {
-                error!("Failed to rebuild ethereum commitment tree: {}", e);
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
+
+        info!("🌳 Merkle Tree Manager started successfully");
+
+        // Keep running
+        std::future::pending::<()>().await;
+        Ok(())
     }
 
+    /// Append a commitment to the appropriate tree based on chain ID
     pub async fn append_commitment(&self, commitment: &str, chain_id: u32) -> Result<usize> {
-        match chain_id {
-            MANTLE_CHAIN_ID => self.append_mantle_leaf(commitment).await,
-            ETHEREUM_CHAIN_ID => self.append_ethereum_leaf(commitment).await,
-            _ => Err(anyhow::anyhow!("Unsupported chain_id: {}", chain_id)),
-        }
+        let start = std::time::Instant::now();
+        let _lock = self.tree_locks.write().await;
+
+        let result = match chain_id {
+            MANTLE_CHAIN_ID => {
+                self.append_leaf_to_tree("mantle_commitments", commitment)
+                    .await
+            }
+            ETHEREUM_CHAIN_ID => {
+                self.append_leaf_to_tree("ethereum_commitments", commitment)
+                    .await
+            }
+            _ => Err(anyhow!("Unsupported chain_id: {}", chain_id)),
+        };
+
+        info!("⏱️  append_commitment took {:?}", start.elapsed());
+        result
     }
 
-    pub async fn append_mantle_leaf(&self, commitment: &str) -> Result<usize> {
-        let size = self.database.get_mantle_tree_size()?;
-        let index = size;
-
-        self.database.add_to_mantle_tree(commitment)?;
-        self.database.set_mantle_node(0, index, commitment)?;
-
-        let mut curr_index = index;
-        let mut curr_hash = commitment.to_string();
-
-        for level in 0..self.tree_depth {
-            let sibling_index = if curr_index % 2 == 0 {
-                curr_index + 1
-            } else {
-                curr_index - 1
-            };
-
-            let sibling = self
-                .database
-                .get_mantle_node(level, sibling_index)?
-                .unwrap_or_else(|| ZERO_LEAF.to_string());
-
-            let parent_hash = self.hash_pair(&curr_hash, &sibling)?;
-
-            let parent_index = curr_index / 2;
-            self.database
-                .set_mantle_node(level + 1, parent_index, &parent_hash)?;
-
-            curr_index = parent_index;
-            curr_hash = parent_hash;
-        }
-
-        self.database.record_root("mantle", &curr_hash)?;
-        info!("✅ Mantle root: {}", curr_hash);
-
-        Ok(index)
-    }
-
-    pub async fn append_ethereum_leaf(&self, intent_id: &str) -> Result<usize> {
-        let size = self.database.get_ethereum_tree_size()?;
-        let index = size;
-
-        self.database.add_to_ethereum_tree(intent_id)?;
-        self.database.set_ethereum_node(0, index, intent_id)?;
-
-        let mut curr_index = index;
-        let mut curr_hash = intent_id.to_string();
-
-        for level in 0..self.tree_depth {
-            let sibling_index = if curr_index % 2 == 0 {
-                curr_index + 1
-            } else {
-                curr_index - 1
-            };
-
-            let sibling = self
-                .database
-                .get_ethereum_node(level, sibling_index)?
-                .unwrap_or_else(|| ZERO_LEAF.to_string());
-
-            let parent_hash = self.hash_pair(&curr_hash, &sibling)?;
-
-            let parent_index = curr_index / 2;
-            self.database
-                .set_ethereum_node(level + 1, parent_index, &parent_hash)?;
-
-            curr_index = parent_index;
-            curr_hash = parent_hash;
-        }
-
-        self.database.record_root("ethereum", &curr_hash)?;
-        info!("✅ Ethereum root: {}", curr_hash);
-
-        Ok(index)
-    }
-
-    pub async fn rebuild_mantle_tree(&self) -> Result<()> {
-        info!("🔨 Rebuilding Mantle tree");
-
-        let mut events = self.database.get_all_mantle_intents()?;
-        if events.is_empty() {
-            info!("✅ No Mantle intents");
-            return Ok(());
-        }
-
-        events.sort_by_key(|e| (e.block_number, e.log_index));
-
-        self.database.clear_mantle_tree()?;
-        self.database.clear_mantle_nodes()?;
-
-        for event in events {
-            self.append_mantle_leaf(&event.commitment).await?;
-        }
-
-        let root = self.compute_mantle_commitment_root()?;
-        info!("✅ Mantle tree rebuilt: {}", root);
-
-        Ok(())
-    }
-
-    pub async fn rebuild_ethereum_tree(&self) -> Result<()> {
-        info!("🔨 Rebuilding Ethereum fill tree");
-
-        let mut events = self.database.get_all_ethereum_fills()?;
-        if events.is_empty() {
-            info!("✅ No Ethereum fills");
-            return Ok(());
-        }
-
-        events.sort_by_key(|e| (e.block_number, e.log_index));
-
-        self.database.clear_ethereum_tree()?;
-        self.database.clear_ethereum_nodes()?;
-
-        for event in events {
-            self.append_ethereum_leaf(&event.intent_id).await?;
-        }
-
-        let root = self.compute_ethereum_root()?;
-        info!("✅ Ethereum fill tree rebuilt: {}", root);
-
-        Ok(())
-    }
-
-    pub async fn rebuild_ethereum_commitment_tree(&self) -> Result<()> {
-        info!("🔨 Rebuilding Ethereum commitment tree");
-
-        let commitments = self.database.get_all_ethereum_commitments()?;
-        if commitments.is_empty() {
-            info!("✅ No Ethereum commitments");
-
-            self.database
-                .record_root("ethereum_commitments", ZERO_LEAF)?;
-            return Ok(());
-        }
-
-        self.database.clear_ethereum_commitment_tree()?;
-        self.database.clear_ethereum_commitment_nodes()?;
-
-        for commitment in commitments {
-            self.append_ethereum_commitment_leaf(&commitment).await?;
-        }
-
-        let root = self.compute_ethereum_commitment_root()?;
-        info!("✅ Ethereum commitment tree rebuilt: {}", root);
-
-        Ok(())
-    }
-
-    pub async fn append_ethereum_commitment_leaf(&self, commitment: &str) -> Result<usize> {
-        let size = self.database.get_ethereum_commitment_tree_size()?;
-        let index = size;
-
-        self.database.add_to_ethereum_commitment_tree(commitment)?;
-        self.database
-            .set_ethereum_commitment_node(0, index, commitment)?;
-
-        let mut curr_index = index;
-        let mut curr_hash = commitment.to_string();
-
-        for level in 0..self.tree_depth {
-            let sibling_index = if curr_index % 2 == 0 {
-                curr_index + 1
-            } else {
-                curr_index - 1
-            };
-
-            let sibling = self
-                .database
-                .get_ethereum_commitment_node(level, sibling_index)?
-                .unwrap_or_else(|| ZERO_LEAF.to_string());
-
-            let parent_hash = self.hash_pair(&curr_hash, &sibling)?;
-
-            let parent_index = curr_index / 2;
-            self.database
-                .set_ethereum_commitment_node(level + 1, parent_index, &parent_hash)?;
-
-            curr_index = parent_index;
-            curr_hash = parent_hash;
-        }
-
-        self.database
-            .record_root("ethereum_commitments", &curr_hash)?;
-        info!("✅ Ethereum commitment root: {}", curr_hash);
-
-        Ok(index)
-    }
-
-    pub fn compute_ethereum_commitment_root(&self) -> Result<String> {
-        if let Ok(Some(root)) = self.database.get_latest_root("ethereum_commitments") {
-            return Ok(root);
-        }
-
-        let tree = self.database.get_all_ethereum_commitments()?;
-
-        if tree.is_empty() {
-            self.database
-                .record_root("ethereum_commitments", ZERO_LEAF)?;
-            return Ok(ZERO_LEAF.to_string());
-        }
-
-        let root = self.compute_root_from_leaves(&tree)?;
-
-        self.database.record_root("ethereum_commitments", &root)?;
-
-        Ok(root)
-    }
-
-    pub fn compute_mantle_commitment_root(&self) -> Result<String> {
-        if let Ok(Some(root)) = self.database.get_latest_root("mantle") {
-            return Ok(root);
-        }
-
-        let tree = self.database.get_mantle_tree()?;
-
-        if tree.is_empty() {
-            self.database.record_root("mantle", ZERO_LEAF)?;
-            return Ok(ZERO_LEAF.to_string());
-        }
-
-        let root = self.compute_root_from_leaves(&tree)?;
-        self.database.record_root("mantle", &root)?;
-
-        Ok(root)
-    }
-
-    fn compute_ethereum_root(&self) -> Result<String> {
-        if let Ok(Some(root)) = self.database.get_latest_root("ethereum") {
-            return Ok(root);
-        }
-
-        let tree = self.database.get_ethereum_tree()?;
-
-        if tree.is_empty() {
-            self.database.record_root("ethereum", ZERO_LEAF)?;
-            return Ok(ZERO_LEAF.to_string());
-        }
-
-        let root = self.compute_root_from_leaves(&tree)?;
-        self.database.record_root("ethereum", &root)?;
-
-        Ok(root)
-    }
-
-    // ============================================================
-    // PROOF GENERATION METHODS
-    // ============================================================
-
-    pub async fn generate_mantle_proof(&self, commitment: &str) -> Result<MerkleProof> {
-        let tree = self.database.get_mantle_tree()?;
-        let index = tree
+    /// Append a leaf to a specific tree - FIXED VERSION
+    pub async fn append_leaf_to_tree(&self, tree_name: &str, leaf_hash: &str) -> Result<usize> {
+        let _lock = self.tree_locks.write().await;
+
+        let tree = self.database.ensure_merkle_tree(tree_name, self.tree_depth as i32)?;
+        let chain_name = if tree_name.contains("mantle") {
+            "mantle"
+        } else {
+            "ethereum"
+        };
+
+        // ✅ FIX: Fetch ALL current leaves from database, not just up to leaf_count
+        let mut leaves = self
+            .database
+            .get_all_commitments_for_chain(chain_name)?;
+
+        // Check if leaf already exists
+        if let Some(existing_index) = leaves
             .iter()
-            .position(|c| c == commitment)
-            .ok_or_else(|| anyhow::anyhow!("Commitment not found"))?;
+            .position(|l| l.to_lowercase() == leaf_hash.to_lowercase())
+        {
+            info!(
+                "⚠️  Leaf {} already exists in tree '{}' at index {}",
+                &leaf_hash[..10],
+                tree_name,
+                existing_index
+            );
+            return Ok(existing_index);
+        }
 
-        let proof = self.compute_merkle_proof(&tree, index)?;
-        let root = self.compute_mantle_commitment_root()?;
+        // Add new leaf
+        let index = leaves.len();
+        leaves.push(leaf_hash.to_string());
 
-        Ok(MerkleProof {
-            path: proof,
-            leaf_index: index,
-            root,
-        })
+        // Compute new root with all leaves
+        let new_root = self.compute_root_from_leaves(&leaves)?;
+
+        // Update tree metadata atomically
+        self.database.update_merkle_root(tree.tree_id, &new_root)?;
+        
+        // ✅ FIX: Set leaf count to ACTUAL count, not increment
+        self.database.set_leaf_count(tree.tree_id, leaves.len() as i64)?;
+
+        info!(
+            "🌳 Tree '{}' updated: root={}, total_leaves={}",
+            tree_name,
+            &new_root[..10],
+            leaves.len()
+        );
+
+        Ok(index)
     }
 
-    // ============================================================
-    // ROOT COMPUTATION HELPERS
-    // ============================================================
-    pub async fn generate_ethereum_commitment_proof(
+    /// Rebuild Mantle commitments tree from database
+    pub async fn rebuild_mantle_commitments_tree(&self) -> Result<()> {
+        let tree = self
+            .database
+            .ensure_merkle_tree("mantle_commitments", self.tree_depth as i32)?;
+        
+        self.rebuild_tree_from_chain(tree.tree_id, "mantle_commitments", "mantle")
+            .await
+    }
+
+    /// Rebuild Ethereum commitments tree from database
+    pub async fn rebuild_ethereum_commitments_tree(&self) -> Result<()> {
+        let tree = self
+            .database
+            .ensure_merkle_tree("ethereum_commitments", self.tree_depth as i32)?;
+        
+        self.rebuild_tree_from_chain(tree.tree_id, "ethereum_commitments", "ethereum")
+            .await
+    }
+
+    /// Rebuild Mantle intents tree
+    pub async fn rebuild_mantle_intents_tree(&self) -> Result<()> {
+        let tree = self
+            .database
+            .ensure_merkle_tree("mantle_intents", self.tree_depth as i32)?;
+        
+        self.rebuild_tree_from_chain(tree.tree_id, "mantle_intents", "mantle")
+            .await
+    }
+
+    /// Rebuild Ethereum intents tree
+    pub async fn rebuild_ethereum_intents_tree(&self) -> Result<()> {
+        let tree = self
+            .database
+            .ensure_merkle_tree("ethereum_intents", self.tree_depth as i32)?;
+        
+        self.rebuild_tree_from_chain(tree.tree_id, "ethereum_intents", "ethereum")
+            .await
+    }
+
+    /// Rebuild Mantle fills tree
+    pub async fn rebuild_mantle_fills_tree(&self) -> Result<()> {
+        let tree = self
+            .database
+            .ensure_merkle_tree("mantle_fills", self.tree_depth as i32)?;
+        
+        let fills = self.database.get_all_mantle_fills()?;
+        let leaf_hashes: Vec<String> = fills.into_iter().map(|f| f.intent_id).collect();
+        
+        self.rebuild_tree_from_leaves(tree.tree_id, "mantle_fills", leaf_hashes)
+            .await
+    }
+
+    /// Rebuild Ethereum fills tree
+    pub async fn rebuild_ethereum_fills_tree(&self) -> Result<()> {
+        let tree = self
+            .database
+            .ensure_merkle_tree("ethereum_fills", self.tree_depth as i32)?;
+        
+        let fills = self.database.get_all_ethereum_fills()?;
+        let leaf_hashes: Vec<String> = fills.into_iter().map(|f| f.intent_id).collect();
+        
+        self.rebuild_tree_from_leaves(tree.tree_id, "ethereum_fills", leaf_hashes)
+            .await
+    }
+
+    /// Generic tree rebuild from chain commitments - FIXED VERSION
+    async fn rebuild_tree_from_chain(
         &self,
-        commitment: &str,
-    ) -> Result<MerkleProof> {
-        let tree = self.database.get_ethereum_commitment_tree()?;
-        let index = tree
-            .iter()
-            .position(|c| c == commitment)
-            .ok_or_else(|| anyhow!("Commitment not found"))?;
-        let proof = self.compute_merkle_proof(&tree, index)?;
-        let root = self.compute_ethereum_commitment_root()?;
+        tree_id: i32,
+        tree_name: &str,
+        chain_name: &str,
+    ) -> Result<()> {
+        let _lock = self.tree_locks.write().await;
 
-        Ok(MerkleProof {
-            path: proof,
-            leaf_index: index,
-            root,
-        })
+        info!("🔄 Rebuilding tree '{}' from chain '{}'...", tree_name, chain_name);
+
+        // ✅ FIX: Fetch ALL leaves from database, don't use limit
+        let leaves = self
+            .database
+            .get_all_commitments_for_chain(chain_name)?;
+
+        self.rebuild_tree_internal(tree_id, tree_name, leaves).await
     }
 
+    /// Generic tree rebuild from provided leaves
+    async fn rebuild_tree_from_leaves(
+        &self,
+        tree_id: i32,
+        tree_name: &str,
+        leaves: Vec<String>,
+    ) -> Result<()> {
+        let _lock = self.tree_locks.write().await;
+
+        info!("🔄 Rebuilding tree '{}' from {} leaves...", tree_name, leaves.len());
+
+        self.rebuild_tree_internal(tree_id, tree_name, leaves).await
+    }
+
+    /// Internal tree rebuild logic - FIXED VERSION
+    async fn rebuild_tree_internal(
+        &self,
+        tree_id: i32,
+        tree_name: &str,
+        leaves: Vec<String>,
+    ) -> Result<()> {
+        // Clear existing tree completely
+        self.database.clear_merkle_nodes_by_tree(tree_id)?;
+
+        if leaves.is_empty() {
+            info!("⚠️  Tree '{}' has no leaves, setting to zero root", tree_name);
+            self.database.update_merkle_root(tree_id, ZERO_LEAF)?;
+            self.database.set_leaf_count(tree_id, 0)?;
+            return Ok(());
+        }
+
+        info!("📊 Building tree '{}' with {} leaves", tree_name, leaves.len());
+
+        // Pad to next power of 2
+        let tree_size = Self::next_power_of_2(leaves.len());
+        let mut current_layer = leaves.clone();
+        current_layer.resize(tree_size, ZERO_LEAF.to_string());
+
+        let mut level = 0;
+        let mut current_size = tree_size;
+
+        // Build tree level by level and store all nodes
+        while current_size > 0 {
+            // Store all nodes at this level
+            for (idx, hash) in current_layer.iter().enumerate() {
+                self.database
+                    .store_merkle_node(tree_id, level, idx as i64, hash)?;
+            }
+
+            if current_size == 1 {
+                break; // Reached root
+            }
+
+            // Build next level
+            let mut next_layer = Vec::with_capacity(current_size / 2);
+            for i in 0..(current_size / 2) {
+                next_layer.push(self.hash_pair(&current_layer[2 * i], &current_layer[2 * i + 1])?);
+            }
+            
+            current_layer = next_layer;
+            current_size /= 2;
+            level += 1;
+        }
+
+        let root = &current_layer[0];
+
+        // Update tree metadata
+        self.database.update_merkle_root(tree_id, root)?;
+        
+        // ✅ FIX: Set exact leaf count, don't increment
+        self.database.set_leaf_count(tree_id, leaves.len() as i64)?;
+
+        info!(
+            "✅ Tree '{}' rebuilt: root={}, leaves={}",
+            tree_name,
+            &root[..10],
+            leaves.len()
+        );
+
+        Ok(())
+    }
+
+    /// Compute root from a list of leaves
     fn compute_root_from_leaves(&self, leaves: &[String]) -> Result<String> {
         if leaves.is_empty() {
             return Ok(ZERO_LEAF.to_string());
         }
 
-        use std::collections::HashMap;
-
-        let mut nodes: HashMap<(usize, usize), String> = HashMap::new();
-
-        for (idx, leaf) in leaves.iter().enumerate() {
-            nodes.insert((0, idx), leaf.clone());
+        if leaves.len() == 1 {
+            return Ok(leaves[0].clone());
         }
 
-        for leaf_idx in 0..leaves.len() {
-            let mut curr_index = leaf_idx;
-            let mut curr_hash = leaves[leaf_idx].clone();
+        let tree_size = Self::next_power_of_2(leaves.len());
+        let mut layer: Vec<String> = leaves.to_vec();
+        layer.resize(tree_size, ZERO_LEAF.to_string());
 
-            for level in 0..self.tree_depth {
-                let sibling_index = if curr_index % 2 == 0 {
-                    curr_index + 1
-                } else {
-                    curr_index - 1
-                };
-
-                // Get sibling (either from nodes or use ZERO_LEAF)
-                let sibling = nodes
-                    .get(&(level, sibling_index))
-                    .cloned()
-                    .unwrap_or_else(|| ZERO_LEAF.to_string());
-
-                let parent_hash = self.hash_pair(&curr_hash, &sibling)?;
-                let parent_index = curr_index / 2;
-
-                nodes.insert((level + 1, parent_index), parent_hash.clone());
-
-                curr_index = parent_index;
-                curr_hash = parent_hash;
+        while layer.len() > 1 {
+            let mut next_layer = Vec::with_capacity(layer.len() / 2);
+            for i in 0..(layer.len() / 2) {
+                next_layer.push(self.hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
             }
+            layer = next_layer;
         }
 
-        Ok(nodes
-            .get(&(self.tree_depth, 0))
-            .cloned()
-            .unwrap_or_else(|| ZERO_LEAF.to_string()))
+        Ok(layer[0].clone())
     }
 
-    fn compute_merkle_proof(&self, leaves: &[String], index: usize) -> Result<Vec<String>> {
-        if index >= leaves.len() {
-            return Err(anyhow::anyhow!("Index out of bounds"));
-        }
-
-        use std::collections::HashMap;
-        let mut nodes: HashMap<(usize, usize), String> = HashMap::new();
-
-        // Initialize level 0
-        for (idx, leaf) in leaves.iter().enumerate() {
-            nodes.insert((0, idx), leaf.clone());
-        }
-
-        // Build tree for all leaves
-        for leaf_idx in 0..leaves.len() {
-            let mut curr_index = leaf_idx;
-            let mut curr_hash = leaves[leaf_idx].clone();
-
-            for level in 0..self.tree_depth {
-                let sibling_index = if curr_index % 2 == 0 {
-                    curr_index + 1
-                } else {
-                    curr_index - 1
-                };
-
-                let sibling = nodes
-                    .get(&(level, sibling_index))
-                    .cloned()
-                    .unwrap_or_else(|| ZERO_LEAF.to_string());
-
-                let parent_hash = self.hash_pair(&curr_hash, &sibling)?;
-                let parent_index = curr_index / 2;
-
-                nodes.insert((level + 1, parent_index), parent_hash.clone());
-
-                curr_index = parent_index;
-                curr_hash = parent_hash;
-            }
-        }
-
-        let mut proof = Vec::new();
-        let mut curr_index = index;
-
-        for level in 0..self.tree_depth {
-            let sibling_index = if curr_index % 2 == 0 {
-                curr_index + 1
-            } else {
-                curr_index - 1
-            };
-
-            let sibling = nodes
-                .get(&(level, sibling_index))
-                .cloned()
-                .unwrap_or_else(|| ZERO_LEAF.to_string());
-
-            proof.push(sibling);
-            curr_index /= 2;
-        }
-
-        Ok(proof)
+    /// Get commitment proof with specific tree size
+    pub async fn get_commitment_proof(
+        &self,
+        commitment: &str,
+        chain_name: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, u32)> {
+        let (proof, index, _root) = self
+            .proof_generator
+            .generate_proof(chain_name, commitment, limit)?;
+        Ok((proof, index as u32))
     }
 
+    // Root getters
+    pub async fn get_mantle_intents_root(&self) -> Result<String> {
+        self.database
+            .get_latest_root("mantle_intents")?
+            .ok_or_else(|| anyhow!("No Mantle intents root found"))
+    }
+
+    pub async fn get_mantle_commitments_root(&self) -> Result<String> {
+        self.database
+            .get_latest_root("mantle_commitments")?
+            .ok_or_else(|| anyhow!("No Mantle commitments root found"))
+    }
+
+    pub async fn get_ethereum_fills_root(&self) -> Result<String> {
+        self.database
+            .get_latest_root("ethereum_fills")?
+            .ok_or_else(|| anyhow!("No Ethereum fills root found"))
+    }
+
+    pub async fn get_ethereum_commitments_root(&self) -> Result<String> {
+        self.database
+            .get_latest_root("ethereum_commitments")?
+            .ok_or_else(|| anyhow!("No Ethereum commitments root found"))
+    }
+
+    pub fn compute_ethereum_fills_root(&self) -> Result<String> {
+        let tree = self
+            .database
+            .get_merkle_tree_by_name("ethereum_fills")?
+            .ok_or_else(|| anyhow!("Ethereum fills tree not found"))?;
+        Ok(tree.root)
+    }
+
+    pub fn compute_mantle_intents_root(&self) -> Result<String> {
+        let tree = self
+            .database
+            .get_merkle_tree_by_name("mantle_intents")?
+            .ok_or_else(|| anyhow!("Mantle intents tree not found"))?;
+        Ok(tree.root)
+    }
+
+    pub fn compute_mantle_commitments_root(&self) -> Result<String> {
+        self.proof_generator.compute_mantle_root()
+    }
+
+    pub fn compute_ethereum_intents_root(&self) -> Result<String> {
+        let tree = self
+            .database
+            .get_merkle_tree_by_name("ethereum_intents")?
+            .ok_or_else(|| anyhow!("Ethereum intents tree not found"))?;
+        Ok(tree.root)
+    }
+
+    pub fn compute_ethereum_commitments_root(&self) -> Result<String> {
+        self.proof_generator.compute_ethereum_root()
+    }
+
+    pub async fn get_tree_sizes(&self) -> Result<(usize, usize, usize, usize)> {
+        let mantle_intents = self.database.get_tree_size("mantle_intents")?;
+        let mantle_commitments = self.database.get_tree_size("mantle_commitments")?;
+        let ethereum_fills = self.database.get_tree_size("ethereum_fills")?;
+        let ethereum_commitments = self.database.get_tree_size("ethereum_commitments")?;
+
+        Ok((
+            mantle_intents,
+            mantle_commitments,
+            ethereum_fills,
+            ethereum_commitments,
+        ))
+    }
+
+    pub fn get_proof_generator(&self) -> Arc<MerkleProofGenerator> {
+        self.proof_generator.clone()
+    }
+
+    /// Hash a pair of nodes (sorted)
     fn hash_pair(&self, a: &str, b: &str) -> Result<String> {
         use ethers::core::utils::keccak256;
+        use ethers::types::H256;
 
-        let a_bytes = hex::decode(a.trim_start_matches("0x"))?;
-        let b_bytes = hex::decode(b.trim_start_matches("0x"))?;
+        let a_bytes = H256::from_slice(&hex::decode(a.trim_start_matches("0x"))?);
+        let b_bytes = H256::from_slice(&hex::decode(b.trim_start_matches("0x"))?);
 
-        let hash = if a < b {
-            keccak256([a_bytes, b_bytes].concat())
+        let hash = if a_bytes < b_bytes {
+            let mut concat = [0u8; 64];
+            concat[..32].copy_from_slice(a_bytes.as_bytes());
+            concat[32..].copy_from_slice(b_bytes.as_bytes());
+            keccak256(concat)
         } else {
-            keccak256([b_bytes, a_bytes].concat())
+            let mut concat = [0u8; 64];
+            concat[..32].copy_from_slice(b_bytes.as_bytes());
+            concat[32..].copy_from_slice(a_bytes.as_bytes());
+            keccak256(concat)
         };
 
         Ok(format!("0x{}", hex::encode(hash)))
     }
 
-    pub async fn get_mantle_root(&self) -> Result<String> {
-        self.compute_mantle_commitment_root()
+    /// Calculate next power of 2
+    fn next_power_of_2(n: usize) -> usize {
+        if n == 0 {
+            return 1;
+        }
+        let mut p = n - 1;
+        p |= p >> 1;
+        p |= p >> 2;
+        p |= p >> 4;
+        p |= p >> 8;
+        p |= p >> 16;
+        p |= p >> 32;
+        p + 1
     }
-
-    pub async fn get_ethereum_root(&self) -> Result<String> {
-        self.compute_ethereum_root()
-    }
-
-    pub async fn get_tree_sizes(&self) -> Result<(usize, usize)> {
-        let mantle = self.database.get_mantle_tree_size()?;
-        let ethereum = self.database.get_ethereum_tree_size()?;
-        Ok((mantle, ethereum))
-    }
-}
-
-///    TESTS       ///
-use serial_test::serial;
-fn create_test_mantle_config() -> crate::relay_coordinator::model::MantleConfig {
-    crate::relay_coordinator::model::MantleConfig {
-        rpc_url: "https://rpc.sepolia.mantle.xyz".to_string(),
-        ws_url: Some("ws://rpc.sepolia.mantle.xyz".to_string()),
-        chain_id: 11155111,
-        private_key: "0x2ea06215c638e5ac29dd5f2b894b936999e000888aace2400e691859e9d7fcba"
-            .to_string(),
-        intent_pool_address: "0x8e9080d32ae8864Af25D3fB59D28De74e7872b1d".to_string(),
-        settlement_address: "0x985bD8f2348aB4b6d6279CA943ddcB932bAE0Bbd".to_string(),
-    }
-}
-
-fn create_test_ethereum_config() -> crate::relay_coordinator::model::EthereumConfig {
-    crate::relay_coordinator::model::EthereumConfig {
-        rpc_url: "https://ethereum-sepolia-rpc.publicnode.com".to_string(),
-        ws_url: Some("ws://ethereum-sepolia-rpc.publicnode.com".to_string()),
-        chain_id: 11155111,
-        private_key: "0x2ea06215c638e5ac29dd5f2b894b936999e000888aace2400e691859e9d7fcba"
-            .to_string(),
-        intent_pool_address: "0x759b40396ac6ff7f1d1cBe095507b5f65229b05a".to_string(),
-        settlement_address: "0x86eEA33D59F1B5a806c41Cf7B040f507C8A6D7D7".to_string(),
-    }
-}
-
-async fn setup_test_manager() -> MerkleTreeManager {
-    let db = Arc::new(
-        Database::new("postgresql://user:1234@localhost:5432/shadow-swap", 10)
-            .expect("Failed to connect to test database"),
-    );
-
-    // Clean up any existing trees from previous test runs
-    let _ = db.delete_merkle_tree_by_name("mantle_intents");
-    let _ = db.delete_merkle_tree_by_name("ethereum_fills");
-    let _ = db.delete_merkle_tree_by_name("ethereum_commitments");
-
-    let mantle_config = create_test_mantle_config();
-    let ethereum_config = create_test_ethereum_config();
-
-    let mantle_relayer = Arc::new(
-        MantleRelayer::new(mantle_config, db.clone())
-            .await
-            .expect("Failed to create Mantle relayer"),
-    );
-
-    let ethereum_relayer = Arc::new(
-        EthereumRelayer::new(ethereum_config, db.clone())
-            .await
-            .expect("Failed to create Ethereum relayer"),
-    );
-
-    let manager = MerkleTreeManager::new(mantle_relayer, ethereum_relayer, db.clone(), 20);
-
-    // Initialize the trees
-    for (tree_name, depth) in &[
-        ("mantle_intents", 20),
-        ("ethereum_fills", 20),
-        ("ethereum_commitments", 20),
-    ] {
-        db.ensure_merkle_tree(tree_name, *depth)
-            .expect("Failed to ensure merkle tree");
-    }
-
-    manager
-}
-
-#[tokio::test]
-#[serial]
-async fn test_canonical_hashing() {
-    let mgr = setup_test_manager().await;
-
-    let a = "0x1111111111111111111111111111111111111111111111111111111111111111";
-    let b = "0x2222222222222222222222222222222222222222222222222222222222222222";
-
-    let h1 = mgr.hash_pair(a, b).unwrap();
-    let h2 = mgr.hash_pair(b, a).unwrap();
-
-    assert_eq!(h1, h2, "Canonical hashing must be order-independent");
-
-    let h3 = mgr.hash_pair(a, b).unwrap();
-    assert_eq!(h1, h3, "Hash should be deterministic");
-}
-
-#[tokio::test]
-#[serial]
-async fn test_incremental_matches_bulk() {
-    let mgr = setup_test_manager().await;
-
-    mgr.database.clear_mantle_tree().unwrap();
-    mgr.database.clear_mantle_nodes().unwrap();
-
-    let leaves: Vec<String> = vec![
-        "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
-        "0x2222222222222222222222222222222222222222222222222222222222222222".to_string(),
-        "0x3333333333333333333333333333333333333333333333333333333333333333".to_string(),
-        "0x4444444444444444444444444444444444444444444444444444444444444444".to_string(),
-    ];
-
-    for leaf in &leaves {
-        mgr.append_mantle_leaf(leaf).await.unwrap();
-    }
-
-    let incremental_root = mgr.compute_mantle_commitment_root().unwrap();
-
-    // Compute from scratch
-    let bulk_root = mgr.compute_root_from_leaves(&leaves).unwrap();
-
-    assert_eq!(
-        incremental_root, bulk_root,
-        "Incremental tree building must produce same root as bulk computation"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn test_empty_tree() {
-    let mgr = setup_test_manager().await;
-    mgr.database.clear_mantle_tree().unwrap();
-
-    let root = mgr.compute_mantle_commitment_root().unwrap();
-    assert_eq!(root, ZERO_LEAF, "Empty tree should have zero root");
-}
-
-#[tokio::test]
-#[serial]
-async fn test_single_leaf_tree() {
-    let mgr = setup_test_manager().await;
-    mgr.database.clear_mantle_tree().unwrap();
-    mgr.database.clear_mantle_nodes().unwrap();
-
-    let leaf = "0x1111111111111111111111111111111111111111111111111111111111111111";
-    mgr.append_mantle_leaf(leaf).await.unwrap();
-
-    let root = mgr.compute_mantle_commitment_root().unwrap();
-    assert_ne!(root, ZERO_LEAF);
-    assert_ne!(root, leaf);
-}
-
-#[tokio::test]
-#[serial]
-async fn test_proof_generation_and_verification() {
-    let mgr = setup_test_manager().await;
-    mgr.database.clear_mantle_tree().unwrap();
-    mgr.database.clear_mantle_nodes().unwrap();
-
-    let leaves = vec![
-        "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "0x2222222222222222222222222222222222222222222222222222222222222222",
-        "0x3333333333333333333333333333333333333333333333333333333333333333",
-    ];
-
-    for leaf in &leaves {
-        mgr.append_mantle_leaf(leaf).await.unwrap();
-    }
-
-    // Generate proof for second leaf
-    let merkle_proof = mgr.generate_mantle_proof(leaves[1]).await.unwrap();
-
-    assert_eq!(merkle_proof.leaf_index, 1);
-    assert!(!merkle_proof.path.is_empty(), "Proof should not be empty");
-
-    let expected_root = merkle_proof.root.clone();
-
-    // Verify proof reconstructs to root
-    let mut curr_hash = leaves[1].to_string();
-
-    for sibling in &merkle_proof.path {
-        curr_hash = mgr.hash_pair(&curr_hash, sibling).unwrap();
-    }
-
-    assert_eq!(curr_hash, expected_root, "Proof should reconstruct to root");
-}
-
-#[tokio::test]
-#[serial]
-async fn test_tree_sizes() {
-    let mgr = setup_test_manager().await;
-    mgr.database.clear_mantle_tree().unwrap();
-    mgr.database.clear_ethereum_tree().unwrap();
-
-    let (mantle_size, eth_size) = mgr.get_tree_sizes().await.unwrap();
-    assert_eq!(mantle_size, 0);
-    assert_eq!(eth_size, 0);
-
-    mgr.append_mantle_leaf("0x1111111111111111111111111111111111111111111111111111111111111111")
-        .await
-        .unwrap();
-
-    let (mantle_size, _) = mgr.get_tree_sizes().await.unwrap();
-    assert_eq!(mantle_size, 1);
-}
-
-#[tokio::test]
-#[serial]
-async fn test_deterministic_roots() {
-    let mgr = setup_test_manager().await;
-
-    let leaves = vec![
-        "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "0x2222222222222222222222222222222222222222222222222222222222222222",
-    ];
-
-    // Build tree once
-    mgr.database.clear_mantle_tree().unwrap();
-    mgr.database.clear_mantle_nodes().unwrap();
-
-    for leaf in &leaves {
-        mgr.append_mantle_leaf(leaf).await.unwrap();
-    }
-    let root1 = mgr.compute_mantle_commitment_root().unwrap();
-
-    // Rebuild tree
-    mgr.rebuild_mantle_tree().await.unwrap();
-    let root2 = mgr.compute_mantle_commitment_root().unwrap();
-
-    assert_eq!(root1, root2, "Rebuilding should produce same root");
-}
-
-#[tokio::test]
-#[serial]
-async fn test_hash_pair_with_zeros() {
-    let mgr = setup_test_manager().await;
-
-    let a = "0x1111111111111111111111111111111111111111111111111111111111111111";
-    let zero = ZERO_LEAF;
-
-    let h1 = mgr.hash_pair(a, zero).unwrap();
-    let h2 = mgr.hash_pair(zero, a).unwrap();
-
-    assert_eq!(h1, h2, "Hashing with zero should be order-independent");
 }

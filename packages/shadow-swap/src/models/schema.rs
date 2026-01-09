@@ -88,6 +88,9 @@ diesel::table! {
         dest_registration_txid -> Nullable<Varchar>,
         #[max_length = 66]
         solver_address -> Nullable<Varchar>,
+        source_settlement_txid -> Nullable<Text>,
+        block_number -> Nullable<Int8>,
+        log_index -> Nullable<Int4>,
     }
 }
 
