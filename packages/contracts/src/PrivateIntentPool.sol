@@ -5,20 +5,25 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {
     ReentrancyGuard
 } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    MerkleProof
+} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {IPoseidonHasher} from "./interface.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
- * @title PrivateIntentPool
- * @notice Creates privacy-preserving cross-chain intents using commitments
- * @dev Multi-token support, proper validation, matches PrivateSettlement
+ * @title PrivateIntentPool (Source Chain Contract)
+ * @notice FIXED: Power-of-2 zero padding + OpenZeppelin MerkleProof
+ * @dev Eliminates orphan edge cases, uses battle-tested OZ verification
  * @custom:security-contact ebounce500@gmail.com
  */
 contract PrivateIntentPool is ReentrancyGuard, Ownable {
     struct Intent {
         bytes32 commitment;
-        address token;
-        uint256 amount;
+        address sourceToken;
+        uint256 sourceAmount;
+        address destToken;
+        uint256 destAmount;
         uint32 destChain;
         uint64 deadline;
         address refundTo;
@@ -36,6 +41,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     mapping(bytes32 => Intent) public intents;
     mapping(bytes32 => bool) public commitments;
     mapping(uint32 => bytes32) public destChainRoots;
+    mapping(uint32 => bytes32) public destChainFillRoots;
     mapping(bytes32 => address) public intentSolvers;
     mapping(address => TokenConfig) public tokenConfigs;
 
@@ -58,12 +64,19 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         bytes32 indexed intentId,
         bytes32 indexed commitment,
         uint32 destChain,
-        address token,
-        uint256 amount
+        address sourceToken,
+        uint256 sourceAmount,
+        address destToken,
+        uint256 destAmount
     );
-    event IntentMarkedFilled(bytes32 indexed intentId, address indexed solver, bytes32 fillRoot);
+    event IntentSettled(
+        bytes32 indexed intentId,
+        address indexed solver,
+        bytes32 fillRoot
+    );
     event IntentRefunded(bytes32 indexed intentId, uint256 amount);
     event RootSynced(uint32 indexed chainId, bytes32 root);
+    event FillRootSynced(uint32 indexed chainId, bytes32 root);
     event MerkleRootUpdated(bytes32 root);
     event TokenAdded(
         address indexed token,
@@ -81,7 +94,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     error InvalidToken();
     error DuplicateCommitment();
     error IntentNotFound();
-    error IntentAlreadyFilled();
+    error IntentAlreadySettled();
     error IntentNotExpired();
     error Unauthorized();
     error TransferFailed();
@@ -112,12 +125,14 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     }
 
     /**
-     * @notice Create private intent with commitment verification
-     * @dev Supports both native ETH and ERC20 tokens
+     * @notice Create private intent - ONLY escrows SOURCE tokens
+     * @dev destToken and destAmount are INFORMATIONAL for solver to read from events
      * @param intentId Unique identifier for the intent
-     * @param commitment Privacy commitment (hash of secret + nullifier + amount + chain)
-     * @param token Token address (use NATIVE_ETH for native transfers)
-     * @param amount Amount in token's smallest unit
+     * @param commitment Privacy commitment hash
+     * @param sourceToken Token address on THIS chain (use NATIVE_ETH for ETH)
+     * @param sourceAmount Amount to ESCROW on THIS chain
+     * @param destToken INFORMATIONAL: Token address on destination chain
+     * @param destAmount INFORMATIONAL: Amount solver should pay on destination
      * @param destChain Destination chain ID
      * @param refundTo Address to receive refund if intent expires
      * @param customDeadline Optional custom deadline (0 = use default timeout)
@@ -125,28 +140,26 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     function createIntent(
         bytes32 intentId,
         bytes32 commitment,
-        address token,
-        uint256 amount,
+        address sourceToken,
+        uint256 sourceAmount,
+        address destToken,
+        uint256 destAmount,
         uint32 destChain,
         address refundTo,
         uint64 customDeadline
     ) external payable nonReentrant {
-        // Validate token configuration
-        TokenConfig storage config = tokenConfigs[token];
+        TokenConfig storage config = tokenConfigs[sourceToken];
         if (!config.supported) revert TokenNotSupported();
-        if (amount < config.minFillAmount || amount > config.maxFillAmount) {
-            revert InvalidAmount();
-        }
-
-        // Validate commitment and intent ID
+        if (
+            sourceAmount < config.minFillAmount ||
+            sourceAmount > config.maxFillAmount
+        ) revert InvalidAmount();
+        if (destAmount == 0) revert InvalidAmount();
         if (commitments[commitment]) revert DuplicateCommitment();
-        if (intents[intentId].commitment != bytes32(0)) {
+        if (intents[intentId].commitment != bytes32(0))
             revert DuplicateCommitment();
-        }
+        if (refundTo == address(0)) revert InvalidAddress();
 
-        if (refundTo == address(0)) revert InvalidToken();
-
-        //  Calculate deadline
         uint64 deadline;
         if (customDeadline == 0) {
             deadline = uint64(block.timestamp + DEFAULT_INTENT_TIMEOUT);
@@ -155,14 +168,14 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             deadline = customDeadline;
         }
 
-        // Mark commitment as used
         commitments[commitment] = true;
 
-        // Store intent
         intents[intentId] = Intent({
             commitment: commitment,
-            token: token,
-            amount: amount,
+            sourceToken: sourceToken,
+            sourceAmount: sourceAmount,
+            destToken: destToken,
+            destAmount: destAmount,
             destChain: destChain,
             deadline: deadline,
             refundTo: refundTo,
@@ -170,91 +183,96 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             refunded: false
         });
 
-        // Add to merkle tree
         commitmentTree.push(commitment);
         commitmentIndex[commitment] = commitmentTree.length - 1;
 
-        // Handle token transfer
-        if (token == NATIVE_ETH) {
-            if (msg.value != amount) revert InvalidAmount();
+        if (sourceToken == NATIVE_ETH) {
+            if (msg.value != sourceAmount) revert InvalidAmount();
         } else {
             if (msg.value != 0) revert InvalidAmount();
             if (
-                !IERC20(token).transferFrom(msg.sender, address(this), amount)
-            ) {
-                revert TransferFailed();
-            }
+                !IERC20(sourceToken).transferFrom(
+                    msg.sender,
+                    address(this),
+                    sourceAmount
+                )
+            ) revert TransferFailed();
         }
 
-        emit IntentCreated(intentId, commitment, destChain, token, amount);
+        emit IntentCreated(
+            intentId,
+            commitment,
+            destChain,
+            sourceToken,
+            sourceAmount,
+            destToken,
+            destAmount
+        );
         emit MerkleRootUpdated(_computeMerkleRoot());
     }
 
     /**
-     * @notice Mark intent as filled after cross-chain verification
-     * @dev Called by relayer after filling on destination chain - proves fill happened
+     * @notice Settle intent after destination fill is verified
+     * @dev Called by relayer after solver filled on destination chain
+     * @dev Releases SOURCE tokens to reimburse solver for their destination payout
+     * @dev Uses OpenZeppelin's MerkleProof.verify for security
      * @param intentId The unique identifier of the intent
-     * @param merkleProof Merkle proof showing intentId exists in destination fillTree
-     * @param leafIndex Position of the intentId in destination merkle tree
+     * @param solver Address of solver who filled on destination
+     * @param merkleProof Proof that intentId exists in destination fillTree
+     * @param leafIndex Position of intentId in destination merkle tree (unused with sorted hashing)
      */
-    function markFilled(
+    function settleIntent(
         bytes32 intentId,
         address solver,
         bytes32[] calldata merkleProof,
         uint256 leafIndex
-    ) external nonReentrant {
+    ) external nonReentrant onlyRelayer {
         Intent storage intent = intents[intentId];
-
-        // Validate intent state
         if (intent.commitment == bytes32(0)) revert IntentNotFound();
-        if (intent.filled || intent.refunded) revert IntentAlreadyFilled();
+        if (intent.filled || intent.refunded) revert IntentAlreadySettled();
         if (solver == address(0)) revert InvalidAddress();
 
-        // Get synced root from destination chain
         bytes32 destRoot = destChainRoots[intent.destChain];
         if (destRoot == bytes32(0)) revert RootNotSynced();
 
-        // Verify intentId (not commitment) exists in dest chain fillTree
-        if (!_verifyMerkleProof(intentId, destRoot, merkleProof, leafIndex)) {
+        // Use OpenZeppelin's battle-tested verification
+        if (!MerkleProof.verify(merkleProof, destRoot, intentId)) {
             revert InvalidProof();
         }
 
-        // Check balance before state changes
-        if (intent.token == NATIVE_ETH) {
-            if (address(this).balance < intent.amount)
+        if (intent.sourceToken == NATIVE_ETH) {
+            if (address(this).balance < intent.sourceAmount)
                 revert InsufficientBalance();
         } else {
-            if (IERC20(intent.token).balanceOf(address(this)) < intent.amount) {
-                revert InsufficientBalance();
-            }
+            if (
+                IERC20(intent.sourceToken).balanceOf(address(this)) <
+                intent.sourceAmount
+            ) revert InsufficientBalance();
         }
 
-        // Mark as filled (CEI pattern)
         intent.filled = true;
         intentSolvers[intentId] = solver;
 
-        // Calculate distribution
-        uint256 fee = (intent.amount * FEE_BPS) / 10000;
-        uint256 solverAmount = intent.amount - fee;
+        uint256 fee = (intent.sourceAmount * FEE_BPS) / 10000;
+        uint256 solverReimbursement = intent.sourceAmount - fee;
 
-        // Transfer to solver and fee collector
-        if (intent.token == NATIVE_ETH) {
-            (bool success1, ) = solver.call{value: solverAmount}("");
+        if (intent.sourceToken == NATIVE_ETH) {
+            (bool success1, ) = solver.call{value: solverReimbursement}("");
             if (!success1) revert TransferFailed();
-
             (bool success2, ) = FEE_COLLECTOR.call{value: fee}("");
             if (!success2) revert TransferFailed();
         } else {
-            if (!IERC20(intent.token).transfer(solver, solverAmount)) {
+            if (
+                !IERC20(intent.sourceToken).transfer(
+                    solver,
+                    solverReimbursement
+                )
+            ) revert TransferFailed();
+            if (!IERC20(intent.sourceToken).transfer(FEE_COLLECTOR, fee))
                 revert TransferFailed();
-            }
-
-            if (!IERC20(intent.token).transfer(FEE_COLLECTOR, fee)) {
-                revert TransferFailed();
-            }
         }
 
-        emit IntentMarkedFilled(intentId, solver, _computeMerkleRoot()); 
+        emit IntentSettled(intentId, solver, destRoot);
     }
 
     /**
@@ -272,44 +290,57 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     }
 
     /**
+     * @notice Sync destination chain FILL merkle root
+     * @dev Used to verify that an intent was actually filled on the destination
+     * @param chainId Destination chain identifier
+     * @param root Merkle root from destination chain's fillTree
+     */
+    function syncDestChainFillRoot(
+        uint32 chainId,
+        bytes32 root
+    ) external onlyRelayer {
+        destChainFillRoots[chainId] = root;
+        emit FillRootSynced(chainId, root);
+    }
+
+    /**
      * @notice Refund expired intent to original depositor
      * @dev Can be called by anyone after deadline passes
      * @param intentId Intent identifier to refund
      */
     function refund(bytes32 intentId) external nonReentrant {
         Intent storage intent = intents[intentId];
-
-        // Validate intent state
         if (intent.commitment == bytes32(0)) revert IntentNotFound();
-        if (intent.filled || intent.refunded) revert IntentAlreadyFilled();
+        if (intent.filled || intent.refunded) revert IntentAlreadySettled();
         if (block.timestamp < intent.deadline) revert IntentNotExpired();
 
-        // Check balance before refund
-        if (intent.token == NATIVE_ETH) {
-            if (address(this).balance < intent.amount)
+        if (intent.sourceToken == NATIVE_ETH) {
+            if (address(this).balance < intent.sourceAmount)
                 revert InsufficientBalance();
         } else {
-            if (IERC20(intent.token).balanceOf(address(this)) < intent.amount) {
-                revert InsufficientBalance();
-            }
+            if (
+                IERC20(intent.sourceToken).balanceOf(address(this)) <
+                intent.sourceAmount
+            ) revert InsufficientBalance();
         }
 
-        // Mark as refunded (CEI pattern)
         intent.refunded = true;
 
-        // Transfer back to refundTo address
-        if (intent.token == NATIVE_ETH) {
-            (bool success, ) = intent.refundTo.call{value: intent.amount}("");
+        if (intent.sourceToken == NATIVE_ETH) {
+            (bool success, ) = intent.refundTo.call{value: intent.sourceAmount}(
+                ""
+            );
             if (!success) revert TransferFailed();
         } else {
             if (
-                !IERC20(intent.token).transfer(intent.refundTo, intent.amount)
-            ) {
-                revert TransferFailed();
-            }
+                !IERC20(intent.sourceToken).transfer(
+                    intent.refundTo,
+                    intent.sourceAmount
+                )
+            ) revert TransferFailed();
         }
 
-        emit IntentRefunded(intentId, intent.amount);
+        emit IntentRefunded(intentId, intent.sourceAmount);
     }
 
     /**
@@ -327,9 +358,8 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     ) external onlyOwner {
         if (tokenConfigs[token].supported) revert AlreadySupported();
         if (token == address(0)) revert InvalidToken();
-        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount) {
+        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount)
             revert InvalidTokenConfig();
-        }
 
         tokenConfigs[token] = TokenConfig({
             supported: true,
@@ -337,7 +367,6 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             maxFillAmount: maxAmount,
             decimals: decimals
         });
-
         tokenIndex[token] = tokenList.length;
         tokenList.push(token);
 
@@ -353,9 +382,8 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         uint256 maxAmount
     ) external onlyOwner {
         if (!tokenConfigs[token].supported) revert TokenNotSupported();
-        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount) {
+        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount)
             revert InvalidTokenConfig();
-        }
 
         tokenConfigs[token].minFillAmount = minAmount;
         tokenConfigs[token].maxFillAmount = maxAmount;
@@ -368,7 +396,6 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
      */
     function removeSupportedToken(address token) external onlyOwner {
         if (!tokenConfigs[token].supported) revert TokenNotSupported();
-
         tokenConfigs[token].supported = false;
 
         uint256 index = tokenIndex[token];
@@ -387,8 +414,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     }
 
     /**
-     * @notice CANONICAL hash pair - sorts inputs before hashing
-     * @dev MUST match PrivateSettlement's hashing for cross-chain compatibility
+     * @notice FIXED: Canonical sorted hashing (compatible with OZ MerkleProof)
      */
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
         return
@@ -398,61 +424,45 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     }
 
     /**
-     * @notice Verify merkle proof using CANONICAL hashing
-     * @dev Verifies intentId exists in destination chain's fillTree
-     */
-    function _verifyMerkleProof(
-        bytes32 leaf,
-        bytes32 root,
-        bytes32[] calldata proof,
-        uint256 index
-    ) internal pure returns (bool) {
-        bytes32 computedHash = leaf;
-
-        for (uint256 i = 0; i < proof.length; i++) {
-            bytes32 proofElement = proof[i];
-            computedHash = _hashPair(computedHash, proofElement);
-            index = index / 2;
-        }
-
-        return computedHash == root;
-    }
-
-    /**
-     * @notice Compute merkle root of all commitments using CANONICAL hashing
-     * @dev Used for generating proofs that can be verified on destination chain
+     * @notice FIXED: Power-of-2 zero padding eliminates orphan edge cases
+     * @dev Tree size is always padded to next power of 2
+     * @dev Every node has a sibling (even if it's bytes32(0))
+     * @dev No more orphan promotion bugs!
      */
     function _computeMerkleRoot() internal view returns (bytes32) {
-        if (commitmentTree.length == 0) return bytes32(0);
-        if (commitmentTree.length == 1) return commitmentTree[0];
-
         uint256 n = commitmentTree.length;
+        if (n == 0) return bytes32(0);
+        if (n == 1) return commitmentTree[0];
 
-        bytes32[] memory layer = new bytes32[](n);
+        // Pad to next power of 2
+        uint256 treeSize = _nextPowerOf2(n);
+        bytes32[] memory layer = new bytes32[](treeSize);
+
+        // Copy actual leaves
         for (uint256 i = 0; i < n; i++) {
             layer[i] = commitmentTree[i];
         }
 
-        while (n > 1) {
-            for (uint256 i = 0; i < n / 2; i++) {
+        // Pad with zeros
+        for (uint256 i = n; i < treeSize; i++) {
+            layer[i] = bytes32(0);
+        }
+
+        // Build tree bottom-up
+        while (treeSize > 1) {
+            for (uint256 i = 0; i < treeSize / 2; i++) {
                 layer[i] = _hashPair(layer[2 * i], layer[2 * i + 1]);
             }
-
-            if (n % 2 == 1) {
-                layer[n / 2] = layer[n - 1];
-                n = n / 2 + 1;
-            } else {
-                n = n / 2;
-            }
+            treeSize = treeSize / 2;
         }
 
         return layer[0];
     }
 
     /**
-     * @notice Generate merkle proof for a commitment
-     * @dev Called by RELAYER to prove commitment exists on source chain
-     * @dev This proof is used when calling PrivateSettlement.fillIntent() on destination
+     * @notice FIXED: Generate proof compatible with OZ MerkleProof.verify
+     * @dev Proof generation matches tree building exactly
+     * @dev Uses same power-of-2 padding as _computeMerkleRoot
      * @param commitment Commitment to generate proof for
      * @return proof Array of sibling hashes
      * @return index Position in tree
@@ -463,57 +473,68 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         index = commitmentIndex[commitment];
         if (index >= commitmentTree.length) revert IntentNotFound();
 
-        uint256 proofLength = 0;
         uint256 n = commitmentTree.length;
-        while (n > 1) {
-            proofLength++;
-            n = (n + 1) / 2;
+        uint256 treeSize = _nextPowerOf2(n);
+
+        // Calculate tree height
+        uint256 height = 0;
+        uint256 temp = treeSize;
+        while (temp > 1) {
+            height++;
+            temp = temp / 2;
         }
 
-        proof = new bytes32[](proofLength);
-        uint256 currentIndex = index;
+        proof = new bytes32[](height);
 
-        bytes32[] memory layer = new bytes32[](commitmentTree.length);
-        for (uint256 i = 0; i < commitmentTree.length; i++) {
+        // Build initial layer with padding
+        bytes32[] memory layer = new bytes32[](treeSize);
+        for (uint256 i = 0; i < n; i++) {
             layer[i] = commitmentTree[i];
         }
+        for (uint256 i = n; i < treeSize; i++) {
+            layer[i] = bytes32(0);
+        }
 
-        n = commitmentTree.length;
-        uint256 proofIndex = 0;
+        uint256 currentIndex = index;
+        uint256 currentSize = treeSize;
 
-        while (n > 1) {
-            if (currentIndex % 2 == 0) {
-                if (currentIndex + 1 < n) {
-                    proof[proofIndex] = layer[currentIndex + 1];
-                } else {
-                    proof[proofIndex] = layer[currentIndex];
-                }
-            } else {
-                proof[proofIndex] = layer[currentIndex - 1];
-            }
+        // Generate proof level by level
+        for (uint256 level = 0; level < height; level++) {
+            // Sibling is always at currentIndex XOR 1
+            uint256 siblingIndex = currentIndex ^ 1;
+            proof[level] = layer[siblingIndex];
 
-            proofIndex++;
-
-            for (uint256 i = 0; i < n / 2; i++) {
+            // Build next layer
+            for (uint256 i = 0; i < currentSize / 2; i++) {
                 layer[i] = _hashPair(layer[2 * i], layer[2 * i + 1]);
             }
 
-            if (n % 2 == 1) {
-                layer[n / 2] = layer[n - 1];
-                n = n / 2 + 1;
-            } else {
-                n = n / 2;
-            }
-
             currentIndex = currentIndex / 2;
+            currentSize = currentSize / 2;
         }
 
         return (proof, index);
     }
 
-    // ============================================================================
-    // VIEW FUNCTIONS
-    // ============================================================================
+    /**
+     * @notice Calculate next power of 2 >= n
+     * @dev Used for power-of-2 tree padding
+     */
+    function _nextPowerOf2(uint256 n) internal pure returns (uint256) {
+        if (n == 0) return 1;
+        n--;
+        n |= n >> 1;
+        n |= n >> 2;
+        n |= n >> 4;
+        n |= n >> 8;
+        n |= n >> 16;
+        n |= n >> 32;
+        n |= n >> 64;
+        n |= n >> 128;
+        return n + 1;
+    }
+
+    // ========== VIEW FUNCTIONS ==========
 
     function getIntent(bytes32 intentId) external view returns (Intent memory) {
         return intents[intentId];
@@ -557,10 +578,6 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         return tokenConfigs[token].supported;
     }
 
-    /**
-     * @notice Reject direct ETH deposits
-     * @dev ETH must be deposited via createIntent function
-     */
     receive() external payable {
         revert DirectETHDepositNotAllowed();
     }

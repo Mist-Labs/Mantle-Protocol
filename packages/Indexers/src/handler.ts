@@ -1,13 +1,17 @@
-import { GoldskyWebhookPayload, RelayerEventPayload, EventType } from "./types";
+import {
+  GoldskyWebhookPayload,
+  RelayerEventPayload,
+  EventType,
+  Chain,
+} from "./types";
+import { deriveChainId, getChainName } from "./utils";
 
-function getChainName(chainId: string): string {
-  switch (chainId) {
-    case "5003":
-      return "mantle";
-    case "11155111":
-      return "ethereum";
-    default:
-      return "unknown";
+function getChainNameString(chainId: string): string {
+  try {
+    const chain = getChainName(chainId);
+    return chain === Chain.Mantle ? "mantle" : "ethereum";
+  } catch {
+    return "unknown";
   }
 }
 
@@ -15,27 +19,28 @@ function parseEventDataFromEntity(
   eventData: any,
   entity: string
 ): Record<string, any> {
-  // Map Goldsky database fields to event data structure
   const baseData: Record<string, any> = {
-    intentId: eventData.intent_id || eventData.id.split("-")[0],
     transactionHash: eventData.transaction_hash,
     blockNumber: eventData.block_number,
   };
 
-  // Entity-specific field mappings
   switch (entity) {
     case "intent_created":
       return {
         ...baseData,
+        intentId: eventData.intent_id || eventData.id.split("-")[0],
         commitment: eventData.commitment,
-        token: eventData.token,
-        amount: eventData.amount,
-        destChain: eventData.dest_chain,
+        sourceToken: eventData.source_token,
+        sourceAmount: eventData.source_amount,
+        destToken: eventData.dest_token,
+        destAmount: eventData.dest_amount,
+        destChain: eventData.dest_chain || eventData.destChain,
       };
 
     case "intent_registered":
       return {
         ...baseData,
+        intentId: eventData.intent_id || eventData.id.split("-")[0],
         commitment: eventData.commitment,
         recipient: eventData.recipient,
       };
@@ -43,14 +48,16 @@ function parseEventDataFromEntity(
     case "intent_filled":
       return {
         ...baseData,
+        intentId: eventData.intent_id || eventData.id.split("-")[0],
         solver: eventData.solver || eventData.filler,
         token: eventData.token,
         amount: eventData.amount,
       };
 
-    case "intent_marked_filled":
+    case "intent_settled":
       return {
         ...baseData,
+        intentId: eventData.intent_id || eventData.id.split("-")[0],
         solver: eventData.solver,
         fillRoot: eventData.fill_root || eventData.root,
       };
@@ -58,21 +65,43 @@ function parseEventDataFromEntity(
     case "intent_refunded":
       return {
         ...baseData,
+        intentId: eventData.intent_id || eventData.id.split("-")[0],
         amount: eventData.amount,
       };
 
     case "withdrawal_claimed":
       return {
         ...baseData,
+        intentId: eventData.intent_id || eventData.id.split("-")[0],
         nullifier: eventData.nullifier,
         recipient: eventData.recipient,
         amount: eventData.amount,
       };
 
+    case "fill_root_synced":
+      return {
+        ...baseData,
+        root: eventData.root,
+        chainId: eventData.chain_id || eventData.chainId,
+        type: "FILL",
+      };
+
+    case "commitment_root_synced":
+      return {
+        ...baseData,
+        root: eventData.root,
+        chainId: eventData.chain_id || eventData.chainId,
+        type: "COMMITMENT",
+      };
+
     case "root_synced":
       return {
+        ...baseData,
         root: eventData.root,
-        chainId: eventData.source_chain_id || eventData.chain_id,
+        chainId:
+          eventData.source_chain_id ||
+          eventData.dest_chain_id ||
+          eventData.chain_id,
       };
 
     default:
@@ -87,12 +116,12 @@ export async function transformGoldskyPayload(
   const eventData = data.new;
 
   const eventType = entity as EventType;
-  const chainId = parseInt(eventData.chain_id);
+  const chainId = deriveChainId(payload);
 
   return {
     event_type: eventType,
-    chain: getChainName(eventData.chain_id),
-    chain_id: chainId,
+    chain: getChainNameString(chainId),
+    chain_id: parseInt(chainId),
     transaction_hash: eventData.transaction_hash,
     block_number: parseInt(eventData.block_number),
     log_index: parseInt(eventData.id.split("-")[1] || "0"),
@@ -102,7 +131,6 @@ export async function transformGoldskyPayload(
   };
 }
 
-// Individual handlers remain but now use transformed payload
 export async function handleIntentCreated(
   payload: GoldskyWebhookPayload
 ): Promise<RelayerEventPayload> {
@@ -121,7 +149,7 @@ export async function handleIntentFilled(
   return transformGoldskyPayload(payload);
 }
 
-export async function handleIntentMarkedFilled(
+export async function handleIntentSettled(
   payload: GoldskyWebhookPayload
 ): Promise<RelayerEventPayload> {
   return transformGoldskyPayload(payload);
@@ -140,6 +168,18 @@ export async function handleWithdrawalClaimed(
 }
 
 export async function handleRootSynced(
+  payload: GoldskyWebhookPayload
+): Promise<RelayerEventPayload> {
+  return transformGoldskyPayload(payload);
+}
+
+export async function handleFillRootSynced(
+  payload: GoldskyWebhookPayload
+): Promise<RelayerEventPayload> {
+  return transformGoldskyPayload(payload);
+}
+
+export async function handleCommitmentRootSynced(
   payload: GoldskyWebhookPayload
 ): Promise<RelayerEventPayload> {
   return transformGoldskyPayload(payload);

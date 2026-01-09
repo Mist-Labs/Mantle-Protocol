@@ -9,13 +9,13 @@ echo "🚀 Deploying Goldsky Subgraphs..."
 # Deploy Ethereum Sepolia
 echo ""
 echo "📡 Deploying Ethereum Sepolia subgraph..."
-goldsky subgraph deploy shadowswap-ethereum/v2 \
+goldsky subgraph deploy shadowswap-ethereum/v3 \
   --from-abi ./goldsky-config-ethereum.json
 
 # Deploy Mantle Sepolia
 echo ""
 echo "📡 Deploying Mantle Sepolia subgraph..."
-goldsky subgraph deploy shadowswap-mantle/v2 \
+goldsky subgraph deploy shadowswap-mantle/v3 \
   --from-abi ./goldsky-config-mantle.json
 
 echo ""

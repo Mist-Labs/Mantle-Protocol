@@ -1,8 +1,11 @@
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
-use crate::model::{
-    ActiveFill, DetectedIntent, FillOpportunity, FillStatus, SolverConfig, SolverMetrics,
-    SupportedToken,
+use crate::{
+    model::{
+        ActiveFill, DetectedIntent, FillOpportunity, FillStatus, SolverConfig, SolverMetrics,
+        SupportedToken,
+    },
+    pricefeed::PriceFeedManager,
 };
 use anyhow::{Context, Result, anyhow};
 use ethers::{
@@ -12,6 +15,7 @@ use ethers::{
     providers::{Middleware, Provider, Ws},
     signers::{LocalWallet, Signer, Wallet},
     types::{Address, Filter, H256, Log, U256},
+    utils::hex,
 };
 use tokio::{sync::RwLock, time::interval};
 use tracing::{debug, error, info, warn};
@@ -26,10 +30,10 @@ abigen!(
             function isTokenSupported(address token) external view returns (bool)
             function generateFillProof(bytes32 intentId) external view returns (bytes32[] memory)
             function getFillTreeSize() external view returns (uint256)
-            event IntentRegistered(bytes32 indexed intentId, bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bytes32[] proof, uint256 leafIndex)
+            function getFillIndex(bytes32 intentId) external view returns (uint256)
+            event IntentRegistered(bytes32 indexed intentId, bytes32 commitment, address destToken, uint256 destAmount, uint32 sourceChain, uint64 deadline, bytes32[] proof, uint256 leafIndex)
             event IntentFilled(bytes32 indexed intentId, address indexed solver, address indexed token, uint256 amount)
-            event WithdrawalClaimed(bytes32 indexed intentId, bytes32 indexed nullifier, address recipient, address token, uint256 amount)
-
+            event WithdrawalClaimed(bytes32 indexed intentId, bytes32 indexed nullifier, address token)
     ]"#
 );
 
@@ -37,9 +41,9 @@ abigen!(
     IntentPoolContract,
     r#"[
         function generateCommitmentProof(bytes32 commitment) external view returns (bytes32[] memory, uint256)
-        function markFilled(bytes32 intentId, bytes32[] calldata merkleProof, uint256 leafIndex) external
-        event IntentCreated(bytes32 indexed intentId, bytes32 indexed commitment, uint32 destChain, uint256 amount, address token)
-        event IntentFilled(bytes32 indexed intentId, address indexed solver, uint256 amount)
+        function settleIntent(bytes32 intentId, address solver, bytes32[] calldata merkleProof, uint256 leafIndex) external
+        event IntentCreated(bytes32 indexed intentId, bytes32 indexed commitment, uint32 destChain, address sourceToken, uint256 sourceAmount, address destToken, uint256 destAmount)
+        event IntentSettled(bytes32 indexed intentId, address indexed solver, bytes32 fillRoot)
     ]"#
 );
 
@@ -55,9 +59,18 @@ abigen!(
 );
 
 impl SupportedToken {
+    pub fn symbol(&self) -> &str {
+        match self {
+            Self::ETH => "ETH",
+            Self::WETH => "WETH",
+            Self::USDC => "USDC",
+            Self::USDT => "USDT",
+            Self::MNT => "MNT",
+        }
+    }
+
     pub fn address(&self, chain_id: u64) -> Address {
         match (self, chain_id) {
-            // Ethereum Sepolia (11155111)
             (Self::ETH, 11155111) => {
                 Address::from_str("0x0000000000000000000000000000000000000000").unwrap()
             }
@@ -73,8 +86,6 @@ impl SupportedToken {
             (Self::MNT, 11155111) => {
                 Address::from_str("0x65e37B558F64E2Be5768DB46DF22F93d85741A9E").unwrap()
             }
-
-            // Mantle Sepolia (5003)
             (Self::MNT, 5003) => {
                 Address::from_str("0x44FCE297e4D6c5A50D28Fb26A58202e4D49a13E7").unwrap()
             }
@@ -87,7 +98,6 @@ impl SupportedToken {
             (Self::USDT, 5003) => {
                 Address::from_str("0xB0ee6EF7788E9122fc4AAE327Ed4FEf56c7da891").unwrap()
             }
-
             _ => Address::zero(),
         }
     }
@@ -101,8 +111,8 @@ impl SupportedToken {
 
     pub fn min_amount(&self) -> U256 {
         match self {
-            Self::ETH | Self::WETH | Self::MNT => U256::from(10).pow(U256::from(15)), // 0.001
-            Self::USDC | Self::USDT => U256::from(10).pow(U256::from(6)),             // 1 USDC/USDT
+            Self::ETH | Self::WETH | Self::MNT => U256::from(10).pow(U256::from(15)),
+            Self::USDC | Self::USDT => U256::from(10).pow(U256::from(6)),
         }
     }
 
@@ -182,26 +192,18 @@ pub struct CrossChainSolver {
     mantle_provider: Arc<Provider<Ws>>,
     ethereum_client: Arc<SignerMiddleware<Arc<Provider<Ws>>, Wallet<SigningKey>>>,
     mantle_client: Arc<SignerMiddleware<Arc<Provider<Ws>>, Wallet<SigningKey>>>,
-
-    // Contract instances
     ethereum_settlement:
         SettlementContract<SignerMiddleware<Arc<Provider<Ws>>, Wallet<SigningKey>>>,
     mantle_settlement: SettlementContract<SignerMiddleware<Arc<Provider<Ws>>, Wallet<SigningKey>>>,
-    ethereum_intent_pool:
-        IntentPoolContract<SignerMiddleware<Arc<Provider<Ws>>, Wallet<SigningKey>>>,
-    mantle_intent_pool: IntentPoolContract<SignerMiddleware<Arc<Provider<Ws>>, Wallet<SigningKey>>>,
-
-    // State Management
     active_fills: Arc<RwLock<HashMap<H256, ActiveFill>>>,
     processed_intents: Arc<RwLock<HashMap<H256, bool>>>,
     metrics: Arc<RwLock<SolverMetrics>>,
-
-    // Token Balances Cache
     token_balances: Arc<RwLock<HashMap<(SupportedToken, u64), U256>>>,
+    price_feed: Arc<PriceFeedManager>,
 }
 
 impl CrossChainSolver {
-    pub async fn new(config: SolverConfig) -> Result<Self> {
+    pub async fn new(config: SolverConfig, price_feed: Arc<PriceFeedManager>) -> Result<Self> {
         info!("🚀 Initializing CrossChainSolver");
 
         let ethereum_provider = Arc::new(
@@ -209,7 +211,6 @@ impl CrossChainSolver {
                 .await
                 .context("Failed to connect to Ethereum")?,
         );
-
         let mantle_provider = Arc::new(
             Provider::<Ws>::connect(&config.mantle_rpc)
                 .await
@@ -220,7 +221,6 @@ impl CrossChainSolver {
             .solver_private_key
             .parse::<LocalWallet>()?
             .with_chain_id(config.ethereum_chain_id);
-
         let mantle_wallet = config
             .solver_private_key
             .parse::<LocalWallet>()?
@@ -230,7 +230,6 @@ impl CrossChainSolver {
             ethereum_provider.clone(),
             ethereum_wallet,
         ));
-
         let mantle_client = Arc::new(SignerMiddleware::new(
             mantle_provider.clone(),
             mantle_wallet,
@@ -238,15 +237,8 @@ impl CrossChainSolver {
 
         let ethereum_settlement =
             SettlementContract::new(config.ethereum_settlement, ethereum_client.clone());
-
         let mantle_settlement =
             SettlementContract::new(config.mantle_settlement, mantle_client.clone());
-
-        let ethereum_intent_pool =
-            IntentPoolContract::new(config.ethereum_intent_pool, ethereum_client.clone());
-
-        let mantle_intent_pool =
-            IntentPoolContract::new(config.mantle_intent_pool, mantle_client.clone());
 
         info!(
             "✅ Solver initialized with address: {:?}",
@@ -261,12 +253,11 @@ impl CrossChainSolver {
             mantle_client,
             ethereum_settlement,
             mantle_settlement,
-            ethereum_intent_pool,
-            mantle_intent_pool,
             active_fills: Arc::new(RwLock::new(HashMap::new())),
             processed_intents: Arc::new(RwLock::new(HashMap::new())),
             metrics: Arc::new(RwLock::new(SolverMetrics::default())),
             token_balances: Arc::new(RwLock::new(HashMap::new())),
+            price_feed,
         })
     }
 
@@ -302,18 +293,16 @@ impl CrossChainSolver {
         Ok(())
     }
 
-    /// Monitor Ethereum IntentPool for new opportunities
     async fn monitor_ethereum_registered_intents(self: Arc<Self>) -> Result<()> {
-        info!("👀 Monitoring Ethereum Settlement IntentRegistered events (polling mode)");
+        info!("👀 Monitoring Ethereum Settlement IntentRegistered events");
 
         let filter = Filter::new()
             .address(self.config.ethereum_settlement)
             .event(
                 "IntentRegistered(bytes32,bytes32,address,uint256,uint32,uint64,bytes32[],uint256)",
             );
-
         let mut last_block = self.ethereum_provider.get_block_number().await?.as_u64();
-        let mut poll_interval = interval(Duration::from_secs(12)); // Ethereum block time
+        let mut poll_interval = interval(Duration::from_secs(12));
 
         loop {
             poll_interval.tick().await;
@@ -362,14 +351,13 @@ impl CrossChainSolver {
     }
 
     async fn monitor_mantle_registered_intents(self: Arc<Self>) -> Result<()> {
-        info!("👀 Monitoring Mantle Settlement IntentRegistered events (polling mode)");
+        info!("👀 Monitoring Mantle Settlement IntentRegistered events");
 
         let filter = Filter::new().address(self.config.mantle_settlement).event(
             "IntentRegistered(bytes32,bytes32,address,uint256,uint32,uint64,bytes32[],uint256)",
         );
-
         let mut last_block = self.mantle_provider.get_block_number().await?.as_u64();
-        let mut poll_interval = interval(Duration::from_secs(3)); // Mantle ~3s block time
+        let mut poll_interval = interval(Duration::from_secs(3));
 
         loop {
             poll_interval.tick().await;
@@ -417,9 +405,14 @@ impl CrossChainSolver {
         }
     }
 
-    async fn handle_registered_intent(&self, log: Log, dest_chain: u32) -> Result<()> {
-        let event = self
-            .mantle_settlement
+    async fn handle_registered_intent(&self, log: Log, chain_where_detected: u32) -> Result<()> {
+        let settlement = if chain_where_detected == self.config.ethereum_chain_id as u32 {
+            &self.ethereum_settlement
+        } else {
+            &self.mantle_settlement
+        };
+
+        let event = settlement
             .decode_event::<IntentRegisteredFilter>(
                 "IntentRegistered",
                 log.topics.clone(),
@@ -427,179 +420,119 @@ impl CrossChainSolver {
             )
             .context("Failed to decode IntentRegistered event")?;
 
+        let intent_id = H256::from(event.intent_id);
+
+        // Immediate check-and-insert to prevent concurrent processing
+        {
+            let mut processed = self.processed_intents.write().await;
+            if processed.contains_key(&intent_id) {
+                debug!(
+                    "⏭️ Intent {:?} is already processed or cooling down",
+                    intent_id
+                );
+                return Ok(());
+            }
+            processed.insert(intent_id, true);
+        }
+
+        // Execute the actual filling logic
+        match self
+            .process_intent_logic(log, event, chain_where_detected)
+            .await
+        {
+            Ok(_) => {
+                info!("✅ Successfully processed intent {:?}", intent_id);
+                Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "❌ Intent {:?} failed: {}. Clearing lock for retry in 12s...",
+                    intent_id, e
+                );
+
+                // Unlock the intent after 12 seconds to allow the solver to try again
+                let processed_cache = self.processed_intents.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(12)).await;
+                    let mut processed = processed_cache.write().await;
+                    processed.remove(&intent_id);
+                    debug!("♻️ Intent {:?} lock released for retries", intent_id);
+                });
+
+                Err(e)
+            }
+        }
+    }
+
+    async fn process_intent_logic(
+        &self,
+        log: Log,
+        event: IntentRegisteredFilter,
+        chain_where_detected: u32,
+    ) -> Result<()> {
         let intent = DetectedIntent {
             intent_id: H256::from(event.intent_id),
             commitment: H256::from(event.commitment),
-            token: event.token,
-            token_type: self.identify_token(event.token, dest_chain as u64)?,
-            amount: event.amount,
+            token: event.dest_token,
+            token_type: self.identify_token(event.dest_token, chain_where_detected as u64)?,
+            amount: event.dest_amount,
             source_chain: event.source_chain,
-            dest_chain,
-            source_block: log.block_number.unwrap().as_u64(),
+            dest_chain: chain_where_detected,
+            source_block: log.block_number.context("Missing block number")?.as_u64(),
             detected_at: chrono::Utc::now().timestamp() as u64,
         };
 
-        debug!(
-            "📋 Intent registered and ready to fill: {:?}",
-            intent.intent_id
-        );
-
-        // Check deadline
-        let deadline = event.deadline;
         let now = chrono::Utc::now().timestamp() as u64;
-        if deadline <= now {
-            warn!("⏰ Intent already expired");
-            return Ok(());
+        if event.deadline <= now {
+            return Err(anyhow!("Intent expired"));
         }
 
-        {
-            let mut metrics = self.metrics.write().await;
-            metrics.total_intents_evaluated += 1;
-        }
+        let provider = if chain_where_detected == self.config.ethereum_chain_id as u32 {
+            &self.ethereum_provider
+        } else {
+            &self.mantle_provider
+        };
 
-        {
-            let processed = self.processed_intents.read().await;
-            if processed.contains_key(&intent.intent_id) {
-                debug!("⏭️ Intent already processed");
-                return Ok(());
+        // Confirmation Wait Loop
+        let required_confirmations = 2;
+        let mut attempts = 0;
+        loop {
+            let current_block = provider.get_block_number().await?.as_u64();
+            let confirmations = current_block.saturating_sub(intent.source_block);
+
+            if confirmations >= required_confirmations {
+                break;
             }
+            if attempts >= 60 {
+                return Err(anyhow!("Confirmation timeout"));
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            attempts += 1;
         }
 
-        // Evaluate and fill
+        // On-chain verification
+        let settlement = if chain_where_detected == self.config.ethereum_chain_id as u32 {
+            &self.ethereum_settlement
+        } else {
+            &self.mantle_settlement
+        };
+
+        let (_, token_check, amount_check, _, _, exists) = settlement
+            .get_intent_params(intent.intent_id.0)
+            .call()
+            .await?;
+
+        if !exists || token_check != intent.token || amount_check != intent.amount {
+            return Err(anyhow!("On-chain verification failed or mismatch"));
+        }
+
         let opportunity = self.evaluate_fill_opportunity(&intent).await?;
-        debug!(
-            "Opportunity evaluated: profit={}, gas={}, profit_bps={}, risk={}",
-            opportunity.estimated_profit,
-            opportunity.gas_estimate,
-            opportunity.profit_bps,
-            opportunity.risk_score
-        );
-
         if self.should_fill(&opportunity).await? {
-            info!(
-                "💰 Filling registered intent: {:?}, profit: {} bps",
-                intent.intent_id, opportunity.profit_bps
-            );
-
-            if dest_chain == self.config.mantle_chain_id as u32 {
+            if chain_where_detected == self.config.mantle_chain_id as u32 {
                 self.execute_fill_on_mantle(&intent, &opportunity).await?;
             } else {
                 self.execute_fill_on_ethereum(&intent, &opportunity).await?;
-            }
-        }
-
-        {
-            let mut processed = self.processed_intents.write().await;
-            processed.insert(intent.intent_id, true);
-        }
-
-        Ok(())
-    }
-
-    async fn execute_fill_on_mantle(
-        &self,
-        intent: &DetectedIntent,
-        opportunity: &FillOpportunity,
-    ) -> Result<()> {
-        info!("🔨 Executing fill on Mantle: {:?}", intent.intent_id);
-
-        // Approve token if ERC20
-        if !intent.token_type.is_native() {
-            self.approve_token_if_needed(
-                intent.token,
-                self.config.mantle_settlement,
-                intent.amount,
-                self.mantle_client.clone(),
-            )
-            .await?;
-        }
-
-        let call = self.mantle_settlement.fill_intent(
-            intent.intent_id.into(),
-            intent.commitment.into(),
-            intent.source_chain,
-            intent.token,
-            intent.amount,
-        );
-
-        let tx = if intent.token_type.is_native() {
-            call.value(intent.amount)
-        } else {
-            call
-        };
-
-        let pending_tx = tx.send().await.context("Failed to send fillIntent tx")?;
-        let tx_hash = pending_tx.tx_hash();
-
-        info!("✅ Fill tx sent: {:?}", tx_hash);
-
-        // Record active fill
-        {
-            let mut active = self.active_fills.write().await;
-            active.insert(
-                intent.intent_id,
-                ActiveFill {
-                    intent_id: intent.intent_id,
-                    tx_hash,
-                    amount: intent.amount,
-                    token: intent.token,
-                    token_type: intent.token_type,
-                    filled_at: chrono::Utc::now().timestamp() as u64,
-                    confirmed_at: None,
-                    status: FillStatus::Pending,
-                    dest_chain: self.config.mantle_chain_id as u32,
-                },
-            );
-        }
-
-        {
-            let mut metrics = self.metrics.write().await;
-            metrics.total_fills_attempted += 1;
-            *metrics
-                .capital_deployed
-                .entry(intent.token_type)
-                .or_insert(U256::zero()) += opportunity.capital_required;
-            metrics.active_fills_count += 1;
-        }
-
-        // Wait for confirmation
-        match pending_tx.await? {
-            Some(receipt) => {
-                if receipt.status == Some(0.into()) {
-                    error!("❌ Fill tx reverted: {:?}", tx_hash);
-
-                    let mut active = self.active_fills.write().await;
-                    if let Some(fill) = active.get_mut(&intent.intent_id) {
-                        fill.status = FillStatus::Failed;
-                    }
-
-                    let mut metrics = self.metrics.write().await;
-                    metrics.failed_fills += 1;
-                    metrics.active_fills_count = metrics.active_fills_count.saturating_sub(1);
-
-                    return Err(anyhow!("Transaction reverted"));
-                }
-
-                info!(
-                    "✅ Fill confirmed in block: {}",
-                    receipt.block_number.unwrap()
-                );
-
-                let mut active = self.active_fills.write().await;
-                if let Some(fill) = active.get_mut(&intent.intent_id) {
-                    fill.status = FillStatus::Confirmed;
-                    fill.confirmed_at = Some(chrono::Utc::now().timestamp() as u64);
-                }
-            }
-            None => {
-                error!("❌ Fill tx dropped from mempool: {:?}", tx_hash);
-
-                let mut active = self.active_fills.write().await;
-                if let Some(fill) = active.get_mut(&intent.intent_id) {
-                    fill.status = FillStatus::Failed;
-                }
-
-                return Err(anyhow!("Transaction dropped"));
             }
         }
 
@@ -613,7 +546,74 @@ impl CrossChainSolver {
     ) -> Result<()> {
         info!("🔨 Executing fill on Ethereum: {:?}", intent.intent_id);
 
+        self.verify_provider_health(self.config.ethereum_chain_id)
+            .await
+            .context("Provider health check failed")?;
+
+        let (
+            _commitment_check,
+            _token_check,
+            _amount_check,
+            _source_chain_check,
+            _deadline_check,
+            exists,
+        ) = self
+            .ethereum_settlement
+            .get_intent_params(intent.intent_id.0)
+            .call()
+            .await
+            .context("Failed to verify intent before fill")?;
+
+        if !exists {
+            return Err(anyhow!(
+                "Intent no longer exists on-chain. May have been filled by another solver."
+            ));
+        }
+
+        let (solver_check, _token, _amount, _source_chain, _timestamp, _claimed) = self
+            .ethereum_settlement
+            .get_fill(intent.intent_id.0)
+            .call()
+            .await
+            .context("Failed to check fill status")?;
+
+        if solver_check != Address::zero() {
+            warn!("⚠️ Intent already filled by solver: {:?}", solver_check);
+            return Err(anyhow!("Intent already filled"));
+        }
+
+        info!("🔍 Pre-flight balance check...");
+        let current_balance = self
+            .fetch_balance_inner(intent.token_type, self.config.ethereum_chain_id)
+            .await
+            .context("Failed to fetch balance for pre-flight check")?;
+
+        let buffer_percent = U256::from(108);
+        let required_with_buffer = intent
+            .amount
+            .saturating_mul(buffer_percent)
+            .checked_div(U256::from(100))
+            .unwrap_or(intent.amount);
+
+        if current_balance < required_with_buffer {
+            return Err(anyhow!(
+                "❌ Pre-flight balance check failed: has {} but needs {} (amount: {} + 8% buffer)",
+                current_balance,
+                required_with_buffer,
+                intent.amount
+            ));
+        }
+
+        info!(
+            "✅ Pre-flight balance OK: {} >= {} needed",
+            current_balance, required_with_buffer
+        );
+
+        let intent_id_bytes: [u8; 32] = intent.intent_id.0;
+        let commitment_bytes: [u8; 32] = intent.commitment.0;
+
         if !intent.token_type.is_native() {
+            info!("🔓 Approving ERC20 token...");
             self.approve_token_if_needed(
                 intent.token,
                 self.config.ethereum_settlement,
@@ -623,23 +623,63 @@ impl CrossChainSolver {
             .await?;
         }
 
-        let call = self.ethereum_settlement.fill_intent(
-            intent.intent_id.into(),
-            intent.commitment.into(),
+        info!("📝 Building fill transaction:");
+        info!("   Intent ID: 0x{}", hex::encode(intent_id_bytes));
+        info!("   Commitment: 0x{}", hex::encode(commitment_bytes));
+        info!("   Source chain: {}", intent.source_chain);
+        info!("   Token: {:?}", intent.token);
+        info!("   Amount: {}", intent.amount);
+
+        let mut tx = self.ethereum_settlement.fill_intent(
+            intent_id_bytes,
+            commitment_bytes,
             intent.source_chain,
             intent.token,
             intent.amount,
         );
 
-        let tx = if intent.token_type.is_native() {
-            call.value(intent.amount)
-        } else {
-            call
+        if intent.token_type.is_native() {
+            info!(
+                "💰 Sending {} ETH with transaction",
+                ethers::utils::format_ether(intent.amount)
+            );
+            tx = tx.value(intent.amount);
+        }
+
+        info!("⛽ Estimating gas...");
+        let gas_estimate = match tx.estimate_gas().await {
+            Ok(gas) => {
+                info!("✅ Gas estimated: {} units", gas);
+                gas
+            }
+            Err(e) => {
+                error!("❌ Gas estimation failed: {:?}", e);
+                let error_msg = format!("{:?}", e);
+
+                if error_msg.contains("0x2c5211c6") {
+                    error!("   Revert reason: IntentNotRegistered()");
+                } else if error_msg.contains("0xfb8f41b2") {
+                    error!("   Revert reason: InsufficientBalance()");
+                    if let Ok(bal) = self
+                        .fetch_balance_inner(intent.token_type, self.config.ethereum_chain_id)
+                        .await
+                    {
+                        error!("   Current balance: {}", bal);
+                        error!("   Required: {}", intent.amount);
+                    }
+                }
+
+                return Err(anyhow!("Gas estimation failed: {}", e));
+            }
         };
 
-        let pending_tx = tx.send().await.context("Failed to send fillIntent tx")?;
-        let tx_hash = pending_tx.tx_hash();
+        let gas_with_buffer = gas_estimate.saturating_mul(U256::from(120)) / U256::from(100);
+        let tx = tx.gas(gas_with_buffer);
 
+        info!("📤 Sending fill transaction...");
+        let pending_tx = tx.send().await.context("Failed to send fill transaction")?;
+
+        let tx_hash = pending_tx.tx_hash();
         info!("✅ Fill tx sent: {:?}", tx_hash);
 
         {
@@ -673,17 +713,14 @@ impl CrossChainSolver {
         match pending_tx.await? {
             Some(receipt) => {
                 if receipt.status == Some(0.into()) {
-                    error!("❌ Fill tx reverted on Ethereum: {:?}", tx_hash);
-
+                    error!("❌ Fill tx reverted: {:?}", tx_hash);
                     let mut active = self.active_fills.write().await;
                     if let Some(fill) = active.get_mut(&intent.intent_id) {
                         fill.status = FillStatus::Failed;
                     }
-
                     let mut metrics = self.metrics.write().await;
                     metrics.failed_fills += 1;
                     metrics.active_fills_count = metrics.active_fills_count.saturating_sub(1);
-
                     return Err(anyhow!("Transaction reverted"));
                 }
 
@@ -691,7 +728,6 @@ impl CrossChainSolver {
                     "✅ Fill confirmed in block: {}",
                     receipt.block_number.unwrap()
                 );
-
                 let mut active = self.active_fills.write().await;
                 if let Some(fill) = active.get_mut(&intent.intent_id) {
                     fill.status = FillStatus::Confirmed;
@@ -699,13 +735,11 @@ impl CrossChainSolver {
                 }
             }
             None => {
-                error!("❌ Fill tx dropped from mempool: {:?}", tx_hash);
-
+                error!("❌ Fill tx dropped: {:?}", tx_hash);
                 let mut active = self.active_fills.write().await;
                 if let Some(fill) = active.get_mut(&intent.intent_id) {
                     fill.status = FillStatus::Failed;
                 }
-
                 return Err(anyhow!("Transaction dropped"));
             }
         }
@@ -713,123 +747,248 @@ impl CrossChainSolver {
         Ok(())
     }
 
-    async fn claim_solver_rewards(&self, fill: &ActiveFill) -> Result<()> {
+    async fn execute_fill_on_mantle(
+        &self,
+        intent: &DetectedIntent,
+        opportunity: &FillOpportunity,
+    ) -> Result<()> {
+        info!("🔨 Executing fill on Mantle: {:?}", intent.intent_id);
+
+        self.verify_provider_health(self.config.mantle_chain_id)
+            .await
+            .context("Mantle provider health check failed")?;
+
+        let (
+            _commitment_check,
+            _token_check,
+            _amount_check,
+            _source_chain_check,
+            _deadline_check,
+            exists,
+        ) = self
+            .mantle_settlement
+            .get_intent_params(intent.intent_id.0)
+            .call()
+            .await
+            .context("Failed to verify intent before fill")?;
+
+        if !exists {
+            return Err(anyhow!(
+                "Intent no longer exists on-chain. May have been filled by another solver."
+            ));
+        }
+
+        let (solver_check, _token, _amount, _source_chain, _timestamp, _claimed) = self
+            .mantle_settlement
+            .get_fill(intent.intent_id.0)
+            .call()
+            .await
+            .context("Failed to check fill status")?;
+
+        if solver_check != Address::zero() {
+            warn!("⚠️ Intent already filled by solver: {:?}", solver_check);
+            return Err(anyhow!("Intent already filled"));
+        }
+
+        info!("🔍 Pre-flight balance check...");
+        let current_balance = self
+            .fetch_balance_inner(intent.token_type, self.config.mantle_chain_id)
+            .await
+            .context("Failed to fetch balance for pre-flight check")?;
+
+        let buffer_percent = U256::from(108);
+        let required_with_buffer = intent
+            .amount
+            .saturating_mul(buffer_percent)
+            .checked_div(U256::from(100))
+            .unwrap_or(intent.amount);
+
+        if current_balance < required_with_buffer {
+            return Err(anyhow!(
+                "❌ Pre-flight balance check failed: has {} but needs {} (amount: {} + 8% buffer)",
+                current_balance,
+                required_with_buffer,
+                intent.amount
+            ));
+        }
+
         info!(
-            "💰 Claiming solver rewards for intent: {:?}",
-            fill.intent_id
+            "✅ Pre-flight balance OK: {} >= {} needed",
+            current_balance, required_with_buffer
         );
 
-        // Get fill proof from destination chain settlement contract
-        let fill_proof = if fill.dest_chain == self.config.ethereum_chain_id as u32 {
-            self.ethereum_settlement
-                .generate_fill_proof(fill.intent_id.into())
-                .call()
-                .await
-                .context("Failed to get fill proof from Ethereum")?
-        } else {
-            self.mantle_settlement
-                .generate_fill_proof(fill.intent_id.into())
-                .call()
-                .await
-                .context("Failed to get fill proof from Mantle")?
-        };
+        let intent_id_bytes: [u8; 32] = intent.intent_id.0;
+        let commitment_bytes: [u8; 32] = intent.commitment.0;
 
-        // Get fill tree size to calculate leaf index
-        let leaf_index = if fill.dest_chain == self.config.ethereum_chain_id as u32 {
-            let tree_size = self
-                .ethereum_settlement
-                .get_fill_tree_size()
-                .call()
-                .await
-                .context("Failed to get tree size")?;
-            tree_size.as_u64() - 1
-        } else {
-            let tree_size = self
-                .mantle_settlement
-                .get_fill_tree_size()
-                .call()
-                .await
-                .context("Failed to get tree size")?;
-            tree_size.as_u64() - 1
-        };
-
-        // Call markFilled on source chain
-        let tx = if fill.dest_chain == self.config.ethereum_chain_id as u32 {
-            self.mantle_intent_pool.mark_filled(
-                fill.intent_id.into(),
-                fill_proof,
-                U256::from(leaf_index),
+        if !intent.token_type.is_native() {
+            info!("🔓 Approving ERC20 token...");
+            self.approve_token_if_needed(
+                intent.token,
+                self.config.mantle_settlement,
+                intent.amount,
+                self.mantle_client.clone(),
             )
-        } else {
-            self.ethereum_intent_pool.mark_filled(
-                fill.intent_id.into(),
-                fill_proof,
-                U256::from(leaf_index),
-            )
-        };
+            .await?;
+        }
 
-        let pending_tx = tx.send().await.context("Failed to send markFilled tx")?;
-        let tx_hash = pending_tx.tx_hash();
+        info!("📝 Building fill transaction:");
+        info!("   Intent ID: 0x{}", hex::encode(intent_id_bytes));
+        info!("   Commitment: 0x{}", hex::encode(commitment_bytes));
+        info!("   Source chain: {}", intent.source_chain);
+        info!("   Token: {:?}", intent.token);
+        info!("   Amount: {}", intent.amount);
 
-        info!("📤 markFilled tx sent: {:?}", tx_hash);
+        let mut tx = self.mantle_settlement.fill_intent(
+            intent_id_bytes,
+            commitment_bytes,
+            intent.source_chain,
+            intent.token,
+            intent.amount,
+        );
 
-        // Wait for confirmation
-        match pending_tx.await? {
-            Some(receipt) => {
-                if receipt.status == Some(0.into()) {
-                    error!("❌ markFilled tx reverted: {:?}", tx_hash);
-                    return Err(anyhow!("markFilled transaction reverted"));
-                }
+        if intent.token_type.is_native() {
+            info!(
+                "💰 Sending {} MNT with transaction",
+                ethers::utils::format_ether(intent.amount)
+            );
+            tx = tx.value(intent.amount);
+        }
 
-                info!(
-                    "✅ Solver rewards claimed successfully in block: {}",
-                    receipt.block_number.unwrap()
-                );
+        info!("⛽ Estimating gas...");
+        let gas_estimate = match tx.estimate_gas().await {
+            Ok(gas) => {
+                info!("✅ Gas estimated: {} units", gas);
+                gas
+            }
+            Err(e) => {
+                error!("❌ Gas estimation failed: {:?}", e);
+                let error_msg = format!("{:?}", e);
 
-                // Update fill status
-                {
-                    let mut active = self.active_fills.write().await;
-                    if let Some(f) = active.get_mut(&fill.intent_id) {
-                        f.status = FillStatus::Claimed;
+                if error_msg.contains("0x2c5211c6") {
+                    error!("   Revert reason: IntentNotRegistered()");
+                } else if error_msg.contains("0xfb8f41b2") {
+                    error!("   Revert reason: InsufficientBalance()");
+                    if let Ok(bal) = self
+                        .fetch_balance_inner(intent.token_type, self.config.mantle_chain_id)
+                        .await
+                    {
+                        error!("   Current balance: {}", bal);
+                        error!("   Required: {}", intent.amount);
                     }
                 }
 
-                // Update metrics
-                {
-                    let mut metrics = self.metrics.write().await;
-                    metrics.successful_fills += 1;
-                    metrics.active_fills_count = metrics.active_fills_count.saturating_sub(1);
+                return Err(anyhow!("Gas estimation failed: {}", e));
+            }
+        };
 
-                    // Record profit
-                    let profit = fill.amount * U256::from(5) / U256::from(10000);
-                    *metrics
-                        .total_profit_earned
-                        .entry(fill.token_type)
-                        .or_insert(U256::zero()) += profit;
+        let gas_with_buffer = gas_estimate.saturating_mul(U256::from(120)) / U256::from(100);
+        let tx = tx.gas(gas_with_buffer);
+
+        info!("📤 Sending fill transaction...");
+        let pending_tx = tx.send().await.context("Failed to send fillIntent tx")?;
+
+        let tx_hash = pending_tx.tx_hash();
+        info!("✅ Fill tx sent: {:?}", tx_hash);
+
+        {
+            let mut active = self.active_fills.write().await;
+            active.insert(
+                intent.intent_id,
+                ActiveFill {
+                    intent_id: intent.intent_id,
+                    tx_hash,
+                    amount: intent.amount,
+                    token: intent.token,
+                    token_type: intent.token_type,
+                    filled_at: chrono::Utc::now().timestamp() as u64,
+                    confirmed_at: None,
+                    status: FillStatus::Pending,
+                    dest_chain: self.config.mantle_chain_id as u32,
+                },
+            );
+        }
+
+        {
+            let mut metrics = self.metrics.write().await;
+            metrics.total_fills_attempted += 1;
+            *metrics
+                .capital_deployed
+                .entry(intent.token_type)
+                .or_insert(U256::zero()) += opportunity.capital_required;
+            metrics.active_fills_count += 1;
+        }
+
+        match pending_tx.await? {
+            Some(receipt) => {
+                if receipt.status == Some(0.into()) {
+                    error!("❌ Fill tx reverted: {:?}", tx_hash);
+                    let mut active = self.active_fills.write().await;
+                    if let Some(fill) = active.get_mut(&intent.intent_id) {
+                        fill.status = FillStatus::Failed;
+                    }
+                    let mut metrics = self.metrics.write().await;
+                    metrics.failed_fills += 1;
+                    metrics.active_fills_count = metrics.active_fills_count.saturating_sub(1);
+                    return Err(anyhow!("Transaction reverted"));
                 }
 
-                Ok(())
+                info!(
+                    "✅ Fill confirmed in block: {}",
+                    receipt.block_number.unwrap()
+                );
+                let mut active = self.active_fills.write().await;
+                if let Some(fill) = active.get_mut(&intent.intent_id) {
+                    fill.status = FillStatus::Confirmed;
+                    fill.confirmed_at = Some(chrono::Utc::now().timestamp() as u64);
+                }
             }
             None => {
-                error!("❌ markFilled tx dropped from mempool: {:?}", tx_hash);
-                Err(anyhow!("Transaction dropped"))
+                error!("❌ Fill tx dropped: {:?}", tx_hash);
+                let mut active = self.active_fills.write().await;
+                if let Some(fill) = active.get_mut(&intent.intent_id) {
+                    fill.status = FillStatus::Failed;
+                }
+                return Err(anyhow!("Transaction dropped"));
             }
         }
+
+        Ok(())
     }
 
-    /// Evaluate fill opportunity profitability
     async fn evaluate_fill_opportunity(&self, intent: &DetectedIntent) -> Result<FillOpportunity> {
-        let settlement_fee_bps = 5u128;
-        let total_cost_bps = settlement_fee_bps;
+        let settlement_fee_bps = 200u128;
+        let fee_amount = intent.amount * U256::from(settlement_fee_bps) / U256::from(10000);
+        let gas_estimate = self.estimate_fill_gas(intent).await?;
 
-        let fees = intent.amount * U256::from(total_cost_bps) / U256::from(10000);
-        let estimated_profit = fees;
-        let profit_bps = (estimated_profit * U256::from(10000) / intent.amount).as_u64() as u16;
+        let fee_value_usd = self
+            .get_token_price_usd(intent.token_type, fee_amount)
+            .await?;
+        let gas_cost_usd = self.get_gas_cost_usd(gas_estimate).await?;
+        let intent_value_usd = self
+            .get_token_price_usd(intent.token_type, intent.amount)
+            .await?;
+
+        let profit_usd = fee_value_usd - gas_cost_usd;
+
+        let estimated_profit = if profit_usd > 0.0 {
+            let profit_per_usd = fee_amount.as_u128() as f64 / fee_value_usd;
+            U256::from((profit_usd * profit_per_usd) as u128)
+        } else {
+            U256::zero()
+        };
+
+        let profit_bps = if intent_value_usd > 0.0 {
+            ((profit_usd / intent_value_usd) * 10000.0).max(0.0) as u16
+        } else {
+            0
+        };
+
+        debug!(
+            "💰 Intent: ${:.6} | Fee: ${:.6} | Gas: ${:.6} | Profit: ${:.6} ({} bps)",
+            intent_value_usd, fee_value_usd, gas_cost_usd, profit_usd, profit_bps
+        );
 
         let risk_score = self.calculate_risk_score(intent).await?;
-
-        // Estimate gas cost
-        let gas_estimate = self.estimate_fill_gas(intent).await?;
 
         Ok(FillOpportunity {
             intent: intent.clone(),
@@ -843,9 +1002,9 @@ impl CrossChainSolver {
 
     async fn estimate_fill_gas(&self, intent: &DetectedIntent) -> Result<U256> {
         let base_gas = if intent.token_type.is_native() {
-            U256::from(100_000) // Native transfer
+            U256::from(100_000)
         } else {
-            U256::from(150_000) // ERC20 transfer
+            U256::from(150_000)
         };
 
         let gas_price = if intent.dest_chain == self.config.ethereum_chain_id as u32 {
@@ -857,7 +1016,6 @@ impl CrossChainSolver {
         Ok(base_gas * gas_price)
     }
 
-    /// Calculate risk score
     async fn calculate_risk_score(&self, intent: &DetectedIntent) -> Result<u8> {
         let mut score = 0u8;
 
@@ -889,7 +1047,6 @@ impl CrossChainSolver {
         Ok(score.min(100))
     }
 
-    /// Decide whether to fill opportunity
     async fn should_fill(&self, opportunity: &FillOpportunity) -> Result<bool> {
         if opportunity.profit_bps < self.config.min_profit_bps {
             debug!("❌ Insufficient profit: {} bps", opportunity.profit_bps);
@@ -926,21 +1083,114 @@ impl CrossChainSolver {
             self.config.ethereum_chain_id
         };
 
+        info!("🔍 Fetching fresh balance for fill decision...");
         let balance = self
-            .get_token_balance(opportunity.intent.token_type, dest_chain)
+            .fetch_balance_with_retry(opportunity.intent.token_type, dest_chain, 3)
             .await?;
 
-        if balance < opportunity.capital_required {
-            warn!("❌ Insufficient balance");
+        {
+            let mut balances = self.token_balances.write().await;
+            balances.insert((opportunity.intent.token_type, dest_chain), balance);
+        }
+
+        let safety_margin = U256::from(105);
+        let required_with_margin = opportunity
+            .capital_required
+            .saturating_mul(safety_margin)
+            .checked_div(U256::from(100))
+            .unwrap_or(opportunity.capital_required);
+
+        if balance < required_with_margin {
+            warn!(
+                "❌ Insufficient balance for {:?} on chain {}: has {} but needs {} (with 5% margin)",
+                opportunity.intent.token_type, dest_chain, balance, required_with_margin
+            );
+            return Ok(false);
+        }
+
+        let active_fills = self.active_fills.read().await;
+        let locked_capital: U256 = active_fills
+            .values()
+            .filter(|f| {
+                f.token_type == opportunity.intent.token_type
+                    && f.dest_chain == dest_chain as u32
+                    && (f.status == FillStatus::Pending || f.status == FillStatus::Confirmed)
+            })
+            .map(|f| f.amount)
+            .fold(U256::zero(), |acc, amount| acc.saturating_add(amount));
+
+        let available_balance = balance.saturating_sub(locked_capital);
+
+        if available_balance < required_with_margin {
+            warn!(
+                "❌ Insufficient available balance: total={}, locked={}, available={}, needed={}",
+                balance, locked_capital, available_balance, required_with_margin
+            );
             return Ok(false);
         }
 
         info!(
-            "✅ Fill approved: profit={}bps, risk={}",
-            opportunity.profit_bps, opportunity.risk_score
+            "✅ Fill approved: profit={}bps, risk={}, balance={}, available={}, needed={}",
+            opportunity.profit_bps,
+            opportunity.risk_score,
+            balance,
+            available_balance,
+            required_with_margin
         );
 
         Ok(true)
+    }
+
+    async fn verify_provider_health(&self, chain_id: u64) -> Result<()> {
+        let provider = if chain_id == self.config.ethereum_chain_id {
+            &self.ethereum_provider
+        } else {
+            &self.mantle_provider
+        };
+
+        let chain_name = if chain_id == self.config.ethereum_chain_id {
+            "Ethereum"
+        } else {
+            "Mantle"
+        };
+
+        let block = tokio::time::timeout(Duration::from_secs(5), provider.get_block_number())
+            .await
+            .context(format!("{} provider timeout", chain_name))?
+            .context(format!("{} provider error", chain_name))?;
+
+        debug!("✅ {} provider healthy (block: {})", chain_name, block);
+        Ok(())
+    }
+
+    async fn get_token_price_usd(&self, token_type: SupportedToken, amount: U256) -> Result<f64> {
+        let token_decimals = token_type.decimals();
+        let amount_decimal = amount.as_u128() as f64 / 10f64.powi(token_decimals as i32);
+
+        let price_per_token = self.price_feed.get_usd_price(token_type).await?;
+
+        let value_usd = amount_decimal * price_per_token;
+
+        debug!(
+            "💵 {} amount {} = ${:.6}",
+            token_type.symbol(),
+            amount_decimal,
+            value_usd
+        );
+
+        Ok(value_usd)
+    }
+
+    async fn get_gas_cost_usd(&self, gas_amount_wei: U256) -> Result<f64> {
+        let gas_amount_eth = gas_amount_wei.as_u128() as f64 / 10f64.powi(18);
+
+        let eth_price = self.price_feed.get_usd_price(SupportedToken::ETH).await?;
+
+        let value_usd = gas_amount_eth * eth_price;
+
+        debug!("💵 Gas {} ETH = ${:.6}", gas_amount_eth, value_usd);
+
+        Ok(value_usd)
     }
 
     async fn approve_token_if_needed(
@@ -956,31 +1206,89 @@ impl CrossChainSolver {
             .allowance(self.config.solver_address, spender)
             .call()
             .await
-            .context("Failed to check allowance")?;
+            .context("Failed to check token allowance")?;
 
-        if allowance < amount {
-            info!("🔓 Approving token: {:?}", token);
-
-            let call = erc20.approve(spender, amount);
-
-            let pending_tx = call
-                .send()
-                .await
-                .context("Failed while waiting for approve tx")?;
-
-            let receipt = pending_tx
-                .await
-                .context("Failed while waiting for approve tx")?;
-
-            receipt.context("Approve tx failed")?;
-
-            info!("✅ Token approved");
+        if allowance >= amount {
+            debug!("✅ Sufficient allowance already exists: {}", allowance);
+            return Ok(());
         }
 
-        Ok(())
+        info!(
+            "🔓 Approving token: current={}, needed={}",
+            allowance, amount
+        );
+
+        let call = erc20.approve(spender, U256::max_value());
+
+        match call.send().await {
+            Ok(pending) => {
+                info!("⏳ Approval tx sent, waiting for confirmation...");
+                match pending.await {
+                    Ok(Some(receipt)) => {
+                        if receipt.status == Some(0.into()) {
+                            return Err(anyhow!("Approval transaction reverted"));
+                        }
+                        info!(
+                            "✅ Approval confirmed in block {}",
+                            receipt.block_number.unwrap()
+                        );
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        warn!("⚠️ Approval tx dropped from mempool");
+                        Err(anyhow!("Approval transaction dropped"))
+                    }
+                    Err(e) => {
+                        error!("❌ Approval confirmation failed: {}", e);
+                        Err(anyhow!("Approval failed: {}", e))
+                    }
+                }
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+
+                if error_msg.contains("already known")
+                    || error_msg.contains("replacement transaction underpriced")
+                {
+                    warn!("⚠️ Approval tx already in mempool, proceeding cautiously...");
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+
+                    let new_allowance = erc20
+                        .allowance(self.config.solver_address, spender)
+                        .call()
+                        .await
+                        .context("Failed to re-check allowance after pending tx")?;
+
+                    if new_allowance >= amount {
+                        info!("✅ Pending approval tx confirmed, allowance now sufficient");
+                        return Ok(());
+                    }
+
+                    warn!("⏳ Waiting for pending approval to confirm...");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+
+                    let final_allowance = erc20
+                        .allowance(self.config.solver_address, spender)
+                        .call()
+                        .await
+                        .context("Failed final allowance check")?;
+
+                    if final_allowance >= amount {
+                        info!("✅ Approval confirmed after wait");
+                        Ok(())
+                    } else {
+                        Err(anyhow!(
+                            "Approval still pending after 8s wait, aborting fill"
+                        ))
+                    }
+                } else {
+                    error!("❌ Approval tx send failed: {}", e);
+                    Err(anyhow!("Approve failed: {}", e))
+                }
+            }
+        }
     }
 
-    /// Monitor active fills for claim events
     async fn monitor_active_fills(self: Arc<Self>) -> Result<()> {
         let mut check_interval = interval(Duration::from_secs(15));
 
@@ -997,7 +1305,6 @@ impl CrossChainSolver {
                     continue;
                 }
 
-                // Check if fill is ready to claim (dest root synced)
                 if let Err(e) = self.process_confirmed_fill(&fill).await {
                     error!("❌ Error processing confirmed fill: {}", e);
                 }
@@ -1006,7 +1313,6 @@ impl CrossChainSolver {
     }
 
     async fn process_confirmed_fill(&self, fill: &ActiveFill) -> Result<()> {
-        // Wait for some confirmations on destination chain before claiming
         let required_confirmations = 6;
 
         let current_block = if fill.dest_chain == self.config.ethereum_chain_id as u32 {
@@ -1015,7 +1321,6 @@ impl CrossChainSolver {
             self.mantle_provider.get_block_number().await?.as_u64()
         };
 
-        // Get fill block number from transaction receipt
         let fill_block = if fill.dest_chain == self.config.ethereum_chain_id as u32 {
             self.ethereum_provider
                 .get_transaction_receipt(fill.tx_hash)
@@ -1036,15 +1341,29 @@ impl CrossChainSolver {
 
         if confirmations < required_confirmations {
             debug!(
-                "⏳ Waiting for more confirmations ({}/{}) for intent: {:?}",
+                "⏳ Waiting for confirmations ({}/{}) for intent: {:?}",
                 confirmations, required_confirmations, fill.intent_id
             );
             return Ok(());
         }
 
-        // Claim solver rewards
-        info!("🎯 Ready to claim rewards for intent: {:?}", fill.intent_id);
-        self.claim_solver_rewards(fill).await?;
+        info!(
+            "✅ Fill confirmed with {} confirmations. Waiting for relayer to settle...",
+            confirmations
+        );
+
+        {
+            let mut active = self.active_fills.write().await;
+            if let Some(f) = active.get_mut(&fill.intent_id) {
+                f.status = FillStatus::Claimed;
+            }
+        }
+
+        {
+            let mut metrics = self.metrics.write().await;
+            metrics.successful_fills += 1;
+            metrics.active_fills_count = metrics.active_fills_count.saturating_sub(1);
+        }
 
         Ok(())
     }
@@ -1055,6 +1374,7 @@ impl CrossChainSolver {
         {
             let balances = self.token_balances.read().await;
             if let Some(balance) = balances.get(&key) {
+                info!("Balance of {:?}: {}", token, balance);
                 return Ok(*balance);
             }
         }
@@ -1122,7 +1442,6 @@ impl CrossChainSolver {
             };
 
             let erc20 = ERC20Contract::new(token.address(chain_id), client);
-
             erc20
                 .balance_of(self.config.solver_address)
                 .call()
@@ -1141,7 +1460,6 @@ impl CrossChainSolver {
         Ok(block.as_u64())
     }
 
-    /// Monitor balances across chains
     async fn monitor_balances(&self) -> Result<()> {
         let mut check_interval =
             interval(Duration::from_secs(self.config.balance_check_interval_secs));
@@ -1168,7 +1486,6 @@ impl CrossChainSolver {
 
                 debug!("💰 Balance {:?} on chain {}: {}", token, chain_id, balance);
 
-                // Update metrics
                 {
                     let mut metrics = self.metrics.write().await;
                     metrics.capital_available.insert((token, chain_id), balance);
@@ -1194,7 +1511,6 @@ impl CrossChainSolver {
         Err(anyhow!("Unsupported token: {:?}", token))
     }
 
-    /// Run health checks
     async fn run_health_checks(&self) -> Result<()> {
         let mut check_interval =
             interval(Duration::from_secs(self.config.health_check_interval_secs));

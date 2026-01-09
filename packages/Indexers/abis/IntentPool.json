@@ -17,7 +17,7 @@
   { "inputs": [], "name": "DirectETHDepositNotAllowed", "type": "error" },
   { "inputs": [], "name": "DuplicateCommitment", "type": "error" },
   { "inputs": [], "name": "InsufficientBalance", "type": "error" },
-  { "inputs": [], "name": "IntentAlreadyFilled", "type": "error" },
+  { "inputs": [], "name": "IntentAlreadySettled", "type": "error" },
   { "inputs": [], "name": "IntentNotExpired", "type": "error" },
   { "inputs": [], "name": "IntentNotFound", "type": "error" },
   { "inputs": [], "name": "InvalidAddress", "type": "error" },
@@ -50,6 +50,25 @@
     "inputs": [
       {
         "indexed": true,
+        "internalType": "uint32",
+        "name": "chainId",
+        "type": "uint32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "root",
+        "type": "bytes32"
+      }
+    ],
+    "name": "FillRootSynced",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "bytes32",
         "name": "intentId",
         "type": "bytes32"
@@ -69,8 +88,39 @@
       {
         "indexed": false,
         "internalType": "address",
-        "name": "token",
+        "name": "sourceToken",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "sourceAmount",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "destToken",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "destAmount",
+        "type": "uint256"
+      }
+    ],
+    "name": "IntentCreated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "intentId",
+        "type": "bytes32"
       },
       {
         "indexed": false,
@@ -79,7 +129,7 @@
         "type": "uint256"
       }
     ],
-    "name": "IntentCreated",
+    "name": "IntentRefunded",
     "type": "event"
   },
   {
@@ -104,26 +154,7 @@
         "type": "bytes32"
       }
     ],
-    "name": "IntentMarkedFilled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "bytes32",
-        "name": "intentId",
-        "type": "bytes32"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      }
-    ],
-    "name": "IntentRefunded",
+    "name": "IntentSettled",
     "type": "event"
   },
   {
@@ -325,8 +356,10 @@
     "inputs": [
       { "internalType": "bytes32", "name": "intentId", "type": "bytes32" },
       { "internalType": "bytes32", "name": "commitment", "type": "bytes32" },
-      { "internalType": "address", "name": "token", "type": "address" },
-      { "internalType": "uint256", "name": "amount", "type": "uint256" },
+      { "internalType": "address", "name": "sourceToken", "type": "address" },
+      { "internalType": "uint256", "name": "sourceAmount", "type": "uint256" },
+      { "internalType": "address", "name": "destToken", "type": "address" },
+      { "internalType": "uint256", "name": "destAmount", "type": "uint256" },
       { "internalType": "uint32", "name": "destChain", "type": "uint32" },
       { "internalType": "address", "name": "refundTo", "type": "address" },
       { "internalType": "uint64", "name": "customDeadline", "type": "uint64" }
@@ -334,6 +367,13 @@
     "name": "createIntent",
     "outputs": [],
     "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "uint32", "name": "", "type": "uint32" }],
+    "name": "destChainFillRoots",
+    "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -384,8 +424,22 @@
             "name": "commitment",
             "type": "bytes32"
           },
-          { "internalType": "address", "name": "token", "type": "address" },
-          { "internalType": "uint256", "name": "amount", "type": "uint256" },
+          {
+            "internalType": "address",
+            "name": "sourceToken",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "sourceAmount",
+            "type": "uint256"
+          },
+          { "internalType": "address", "name": "destToken", "type": "address" },
+          {
+            "internalType": "uint256",
+            "name": "destAmount",
+            "type": "uint256"
+          },
           { "internalType": "uint32", "name": "destChain", "type": "uint32" },
           { "internalType": "uint64", "name": "deadline", "type": "uint64" },
           { "internalType": "address", "name": "refundTo", "type": "address" },
@@ -473,8 +527,10 @@
     "name": "intents",
     "outputs": [
       { "internalType": "bytes32", "name": "commitment", "type": "bytes32" },
-      { "internalType": "address", "name": "token", "type": "address" },
-      { "internalType": "uint256", "name": "amount", "type": "uint256" },
+      { "internalType": "address", "name": "sourceToken", "type": "address" },
+      { "internalType": "uint256", "name": "sourceAmount", "type": "uint256" },
+      { "internalType": "address", "name": "destToken", "type": "address" },
+      { "internalType": "uint256", "name": "destAmount", "type": "uint256" },
       { "internalType": "uint32", "name": "destChain", "type": "uint32" },
       { "internalType": "uint64", "name": "deadline", "type": "uint64" },
       { "internalType": "address", "name": "refundTo", "type": "address" },
@@ -500,22 +556,6 @@
     "name": "isTokenSupported",
     "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
     "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      { "internalType": "bytes32", "name": "intentId", "type": "bytes32" },
-      { "internalType": "address", "name": "solver", "type": "address" },
-      {
-        "internalType": "bytes32[]",
-        "name": "merkleProof",
-        "type": "bytes32[]"
-      },
-      { "internalType": "uint256", "name": "leafIndex", "type": "uint256" }
-    ],
-    "name": "markFilled",
-    "outputs": [],
-    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -546,6 +586,32 @@
   {
     "inputs": [],
     "name": "renounceOwnership",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "bytes32", "name": "intentId", "type": "bytes32" },
+      { "internalType": "address", "name": "solver", "type": "address" },
+      {
+        "internalType": "bytes32[]",
+        "name": "merkleProof",
+        "type": "bytes32[]"
+      },
+      { "internalType": "uint256", "name": "leafIndex", "type": "uint256" }
+    ],
+    "name": "settleIntent",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint32", "name": "chainId", "type": "uint32" },
+      { "internalType": "bytes32", "name": "root", "type": "bytes32" }
+    ],
+    "name": "syncDestChainFillRoot",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

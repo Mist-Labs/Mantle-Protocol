@@ -15,6 +15,7 @@
   },
   { "inputs": [], "name": "AlreadyClaimed", "type": "error" },
   { "inputs": [], "name": "AlreadyFilled", "type": "error" },
+  { "inputs": [], "name": "AlreadyRegistered", "type": "error" },
   { "inputs": [], "name": "AlreadySupported", "type": "error" },
   { "inputs": [], "name": "AmountMismatch", "type": "error" },
   { "inputs": [], "name": "ChainMismatch", "type": "error" },
@@ -67,6 +68,25 @@
     "inputs": [
       {
         "indexed": true,
+        "internalType": "uint32",
+        "name": "chainId",
+        "type": "uint32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "root",
+        "type": "bytes32"
+      }
+    ],
+    "name": "CommitmentRootSynced",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "bytes32",
         "name": "intentId",
         "type": "bytes32"
@@ -111,13 +131,13 @@
       {
         "indexed": false,
         "internalType": "address",
-        "name": "token",
+        "name": "destToken",
         "type": "address"
       },
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "amount",
+        "name": "destAmount",
         "type": "uint256"
       },
       {
@@ -278,22 +298,10 @@
         "type": "bytes32"
       },
       {
-        "indexed": true,
-        "internalType": "address",
-        "name": "recipient",
-        "type": "address"
-      },
-      {
         "indexed": false,
         "internalType": "address",
         "name": "token",
         "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
       }
     ],
     "name": "WithdrawalClaimed",
@@ -603,8 +611,8 @@
     "inputs": [
       { "internalType": "bytes32", "name": "intentId", "type": "bytes32" },
       { "internalType": "bytes32", "name": "commitment", "type": "bytes32" },
-      { "internalType": "address", "name": "token", "type": "address" },
-      { "internalType": "uint256", "name": "amount", "type": "uint256" },
+      { "internalType": "address", "name": "destToken", "type": "address" },
+      { "internalType": "uint256", "name": "destAmount", "type": "uint256" },
       { "internalType": "uint32", "name": "sourceChain", "type": "uint32" },
       { "internalType": "uint64", "name": "deadline", "type": "uint64" },
       { "internalType": "bytes32", "name": "sourceRoot", "type": "bytes32" },
@@ -634,9 +642,26 @@
   },
   {
     "inputs": [{ "internalType": "uint32", "name": "", "type": "uint32" }],
+    "name": "sourceChainCommitmentRoots",
+    "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "uint32", "name": "", "type": "uint32" }],
     "name": "sourceChainRoots",
     "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint32", "name": "chainId", "type": "uint32" },
+      { "internalType": "bytes32", "name": "root", "type": "bytes32" }
+    ],
+    "name": "syncSourceChainCommitmentRoot",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
