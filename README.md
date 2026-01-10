@@ -166,10 +166,10 @@ yarn install
 | **Compile Contracts** | `@mantle/contracts` | `yarn workspace @mantle/contracts build` |
 | **Run Contract Tests** | `@mantle/contracts` | `yarn workspace @mantle/contracts test` |
 | **Deploy Contracts** | `@mantle/contracts` | `yarn workspace @mantle/contracts deploy` |
-| **Run Frontend** | `@mantle/shadow-swap` | `yarn workspace @mantle/shadow-swap dev` |
-| **Run Indexer** | `@mantle/indexer` | `yarn workspace @mantle/indexer start` |
-| **Run Solver** | `@mantle/solver` | `yarn workspace @mantle/solver start` |
-| **Run Relayer** | `@mantle/relayer` | `cd packages/relayer && cargo run --release` |
+| **Run Frontend** | `@mantle/frontend` | `yarn workspace @mantle/frontend dev` |
+| **Run Indexer** | `@mantle/Indexers` | `yarn workspace @mantle/Indexers start` |
+| **Run Solver** | `@mantle/solver` | `cd packages/solver && cargo run --release` |
+| **Run Relayer** | `@mantle/shadow-swap` | `cd packages/shadow-swap && cargo run --release` |
 
 ---
 
