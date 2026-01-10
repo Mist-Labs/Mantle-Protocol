@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use crate::{
     database::database::Database,

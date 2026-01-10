@@ -1,7 +1,7 @@
 mod api;
 mod model;
-mod solver;
 mod pricefeed;
+mod solver;
 
 use std::sync::Arc;
 
@@ -75,12 +75,11 @@ async fn main() -> Result<()> {
     info!("   • Solver Address: {:?}", config.solver_address);
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-     info!("💱 Initializing price feeds");
+    info!("💱 Initializing price feeds");
     let price_feed = Arc::new(crate::pricefeed::PriceFeedManager::new());
     price_feed.init().await;
     info!("✅ Price feeds initialized");
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
 
     info!("🔧 Initializing solver");
     let solver = Arc::new(
