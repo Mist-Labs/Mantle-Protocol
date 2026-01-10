@@ -1,7 +1,7 @@
 # ============================================
 # Stage 1: Build
 # ============================================
-FROM node:slim AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /build
 
@@ -47,8 +47,11 @@ USER appuser
 
 ENV NODE_ENV=production
 
+# Expose port if your indexer has metrics/health endpoints
+# EXPOSE 3000
+
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
 
-# Adjust based on your package.json start script
-CMD ["node", "src/index.js"]
+# Run the built application
+CMD ["node", "dist/index.js"]
