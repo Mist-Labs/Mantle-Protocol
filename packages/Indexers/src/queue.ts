@@ -15,10 +15,12 @@ import {
 import crypto from "crypto";
 import axios from "axios";
 
+// BullMQ connection configuration with TLS support for Upstash
 const connection = {
   host: config.redis.host,
   port: config.redis.port,
   password: config.redis.password,
+  tls: config.redis.host.includes('upstash.io') ? {} : undefined, // Enable TLS only for Upstash
 };
 
 export const eventQueue = new Queue("goldsky-events", { connection });
