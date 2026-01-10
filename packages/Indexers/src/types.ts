@@ -14,7 +14,7 @@ export interface GoldskyWebhookPayload {
     old: any | null;
   };
   data_source: string;
-  entity: string; 
+  entity: string;
   id: string;
   op: "INSERT" | "UPDATE" | "DELETE";
   webhook_id: string;
@@ -37,23 +37,25 @@ export enum EventType {
   IntentCreated = "intent_created",
   IntentRegistered = "intent_registered",
   IntentFilled = "intent_filled",
-  IntentMarkedFilled = "intent_marked_filled",
+  IntentSettled = "intent_settled",
   IntentRefunded = "intent_refunded",
   WithdrawalClaimed = "withdrawal_claimed",
   RootSynced = "root_synced",
+  FillRootSynced = "fill_root_synced",
+  CommitmentRootSynced = "commitment_root_synced",
 }
 
-// Map Goldsky entity names to our event types
 export const ENTITY_TO_EVENT_TYPE: Record<string, EventType> = {
   root_synced: EventType.RootSynced,
   intent_created: EventType.IntentCreated,
   intent_registered: EventType.IntentRegistered,
   intent_filled: EventType.IntentFilled,
-  intent_marked_filled: EventType.IntentMarkedFilled,
+  intent_settled: EventType.IntentSettled,
   intent_refunded: EventType.IntentRefunded,
   withdrawal_claimed: EventType.WithdrawalClaimed,
+  fill_root_synced: EventType.FillRootSynced,
+  commitment_root_synced: EventType.CommitmentRootSynced,
 };
-
 
 export enum Chain {
   Mantle = "mantle",

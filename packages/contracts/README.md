@@ -69,15 +69,16 @@ ShadowSwap enables **private, bidirectional token transfers** between Ethereum a
 | Contract | Address | Explorer |
 |----------|---------|----------|
 | **PoseidonHasher** | `0x8EA86eD4317AF92f73E5700eB9b93A72dE62f3B1` | [View](https://explorer.sepolia.mantle.xyz/address/0x8EA86eD4317AF92f73E5700eB9b93A72dE62f3B1) |
-| **PrivateIntentPool** | `0x3ecB330Aa3EaE12bbc26022dE9ee140C06e3da43` | [View](https://explorer.sepolia.mantle.xyz/address/0x3ecB330Aa3EaE12bbc26022dE9ee140C06e3da43) |
-| **PrivateSettlement** | `0x67eEf23fc45e149E43944100be8658c55D48f1a1` | [View](https://explorer.sepolia.mantle.xyz/address/0x67eEf23fc45e149E43944100be8658c55D48f1a1) |
+| **PrivateIntentPool** | `0x6ebcF830b855108Fa44AbED6Ba964F2Af9C34424` | [View](https://explorer.sepolia.mantle.xyz/address/0x6ebcF830b855108Fa44AbED6Ba964F2Af9C34424) |
+| **PrivateSettlement** | `0x1c4F9eBeccE31cEFe2FDe415b05184b4ea46908f` | [View](https://explorer.sepolia.mantle.xyz/address/0x1c4F9eBeccE31cEFe2FDe415b05184b4ea46908f) |
 
 ### Ethereum Sepolia (Chain ID: 11155111)
 
 | Contract | Address | Explorer |
 |----------|---------|----------|
-| **PrivateIntentPool** | `0xA019C4fFC50b58AF6221F9EB59126630E26f3326` | [View](https://sepolia.etherscan.io/address/0xA019C4fFC50b58AF6221F9EB59126630E26f3326) |
-| **PrivateSettlement** | `0x0d632dC7786CD01712ED3CF3c6fa7F9e9C67Fa49` | [View](https://sepolia.etherscan.io/address/0x0d632dC7786CD01712ED3CF3c6fa7F9e9C67Fa49) |
+| **PoseidonHasher** | `0x5d3efc46ddba9f083b571a64210B976E06e6d7B2` | [View](https://sepolia.etherscan.io/address/0x5d3efc46ddba9f083b571a64210B976E06e6d7B2) |
+| **PrivateIntentPool** | `0xcb46d916522D7c6853fcE2aa5F337e0a3626E263` | [View](https://sepolia.etherscan.io/address/0xcb46d916522D7c6853fcE2aa5F337e0a3626E263) |
+| **PrivateSettlement** | `0x7CCC9864125143e6c530506772Eaf5595DC14897` | [View](https://sepolia.etherscan.io/address/0x7CCC9864125143e6c530506772Eaf5595DC14897) |
 
 ---
 

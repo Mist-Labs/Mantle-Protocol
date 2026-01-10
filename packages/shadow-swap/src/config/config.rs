@@ -125,20 +125,3 @@ impl MantleConfig {
     }
 }
 
-/*
-
-
-
-
-register intents done by relayer.
-
-
-
-Option A: User creates intent on IntentPool → Relayer detects → Relayer registers on Settlement → Solver fills -> correct.
-
-
-
-i think this should be used by solver, while the relayer generates proof and registers intent.
-
-I am looking to deploy the relayers and the solvers, so please re-analyze the entire relayer system again before i deploy. If you have more ques, pls ask.
-*/

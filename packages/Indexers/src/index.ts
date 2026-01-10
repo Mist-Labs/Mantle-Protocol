@@ -2,51 +2,68 @@ import express, { NextFunction, Request, Response } from "express";
 import { config } from "./config";
 import { GoldskyWebhookPayload } from "./types";
 import { eventQueue, initQueue } from "./queue";
+import { deriveChainId } from "./utils";
 
 const SUPPORTED_ENTITIES = [
   "intent_created",
   "intent_registered",
   "intent_filled",
-  "intent_marked_filled",
+  "intent_settled",
   "intent_refunded",
   "withdrawal_claimed",
   "root_synced",
+  "fill_root_synced",
+  "commitment_root_synced"
 ];
 
-const SUPPORTED_CHAIN_IDS = ["5003", "11155111"]; 
+const SUPPORTED_CHAIN_IDS = ["5003", "11155111"]; // As strings to match Goldsky format
 
 const app = express();
 
 app.use(express.json());
 
-app.use("/webhook", (req: Request, _res: Response, next: NextFunction): void => {
-  const secret = req.headers["goldsky-webhook-secret"];
+app.use(
+  "/webhook",
+  (req: Request, _res: Response, next: NextFunction): void => {
+    const secret = req.headers["goldsky-webhook-secret"];
 
-  if (!secret || secret !== config.goldskyWebhookSecret) {
-    console.warn("⚠️  Unauthorized webhook attempt");
-    _res.status(401).json({ error: "Unauthorized" });
-    return;
+    if (!secret || secret !== config.goldskyWebhookSecret) {
+      console.warn("⚠️  Unauthorized webhook attempt");
+      _res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    next();
   }
-
-  next();
-});
+);
 
 app.post("/webhook", async (req: Request, res: Response): Promise<void> => {
   try {
     const payload: GoldskyWebhookPayload = req.body;
 
+    // DEBUG: Log full payload
+    console.log("📦 Full Goldsky Payload:", JSON.stringify(payload, null, 2));
+
     // Validate Goldsky payload structure
     if (!payload.data?.new || !payload.entity) {
       console.error("❌ Invalid Goldsky payload structure");
-      res.status(400).json({ 
+      res.status(400).json({
         error: "Invalid webhook payload",
-        details: "Missing data.new or entity field"
+        details: "Missing data.new or entity field",
       });
       return;
     }
 
     const { entity, data } = payload;
     const eventData = data.new;
+
+    // Derive chain ID using shared utility
+    const chainId = deriveChainId(payload);
+
+    // DEBUG: Log extracted data
+    console.log("📊 Entity:", entity);
+    console.log("📊 Chain ID (derived):", chainId);
+    console.log("📊 Event data:", JSON.stringify(eventData, null, 2));
 
     // Validate entity type
     if (!SUPPORTED_ENTITIES.includes(entity)) {
@@ -55,9 +72,9 @@ app.post("/webhook", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Validate chain
-    if (!SUPPORTED_CHAIN_IDS.includes(eventData.chain_id)) {
-      console.log(`⚠️  Unsupported chain: ${eventData.chain_id}`);
+    // Validate chain using derived chainId
+    if (!chainId || !SUPPORTED_CHAIN_IDS.includes(chainId)) {
+      console.log(`⚠️  Unsupported chain: ${chainId}`);
       res.status(200).json({ status: "ignored", reason: "unsupported_chain" });
       return;
     }
@@ -65,7 +82,7 @@ app.post("/webhook", async (req: Request, res: Response): Promise<void> => {
     const idempotencyKey = eventData.id; // Goldsky provides unique ID
 
     console.log(
-      `📡 Received: ${entity} | Chain: ${eventData.chain_id} | Tx: ${eventData.transaction_hash}`
+      `📡 Received: ${entity} | Chain: ${chainId} | Tx: ${eventData.transaction_hash}`
     );
 
     // Respond immediately to Goldsky

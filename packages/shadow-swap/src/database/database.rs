@@ -7,17 +7,17 @@ use diesel::prelude::*;
 use diesel::r2d2::{self, ConnectionManager, Pool};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use dotenv::dotenv;
-use tracing::info;
+use serde_json::Value;
+use tracing::{error, info, warn};
 
 use crate::database::model::{
-    BridgeStats, DbBridgeEvent, DbChainTransaction, DbEthereumIntentCreated, DbMantleIntentCreated,
-    DbMerkleNode, DbMerkleTree, NewBridgeEvent, NewChainTransaction, NewMerkleNode, NewMerkleTree,
+    BridgeStats, DbBridgeEvent, DbChainTransaction, DbMerkleNode, DbMerkleTree, NewBridgeEvent,
+    NewChainTransaction, NewMerkleNode, NewMerkleTree, NewRootSync,
 };
 
-use crate::models::model::{EthereumFill, EthereumIntent, MantleFill, MantleIntent};
+use crate::models::model::{EthereumFill, IntentCreatedEvent, MantleFill};
 use crate::models::schema::{
-    bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
-    mantle_sepolia_intent_created, merkle_trees, root_syncs,
+    bridge_events, chain_transactions, indexer_checkpoints, merkle_trees, root_syncs,
 };
 use crate::{
     database::model::{DbIntent, DbIntentPrivacyParams, NewIntent, NewIntentPrivacyParams},
@@ -103,7 +103,7 @@ impl Database {
         let max_connections = std::env::var("DATABASE_MAX_CONNECTIONS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(10);
+            .unwrap_or(20);
 
         let manager = ConnectionManager::<PgConnection>::new(database_url);
         let pool = Pool::builder()
@@ -125,6 +125,54 @@ impl Database {
         self.pool.get().context("Failed to get database connection")
     }
 
+    // ================= MARKED TO BE DELETED ===================
+    /*
+
+        // ❌ DELETE - Replaced by get_all_commitments_for_chain()
+    pub fn get_all_ethereum_commitments(&self) -> Result<Vec<String>>
+    pub fn get_all_mantle_commitments(&self) -> Result<Vec<String>>
+
+    // ❌ DELETE - Replaced by clear_merkle_tree_completely()
+    pub fn clear_ethereum_commitment_tree(&self) -> Result<()>
+    pub fn clear_mantle_commitment_tree(&self) -> Result<()>
+    pub fn clear_ethereum_commitment_nodes(&self) -> Result<()>
+    pub fn clear_mantle_commitment_nodes(&self) -> Result<()>
+    pub fn clear_ethereum_intent_tree(&self) -> Result<()>
+    pub fn clear_ethereum_fill_tree(&self) -> Result<()>
+    pub fn clear_ethereum_intent_nodes(&self) -> Result<()>
+    pub fn clear_ethereum_fill_nodes(&self) -> Result<()>
+    pub fn clear_mantle_tree(&self) -> Result<()>
+    pub fn clear_mantle_nodes(&self) -> Result<()>
+    pub fn clear_ethereum_tree(&self) -> Result<()>
+    pub fn clear_ethereum_nodes(&self) -> Result<()>
+
+    // ❌ DELETE - Replaced by generic functions
+    pub fn get_ethereum_commitment_tree_size(&self) -> Result<usize>
+    pub fn get_mantle_commitment_tree_size(&self) -> Result<usize>
+    pub fn add_to_ethereum_commitment_tree(&self, _commitment: &str) -> Result<()>
+    pub fn add_to_mantle_commitment_tree(&self, _commitment: &str) -> Result<()>
+    pub fn set_ethereum_commitment_node(...) -> Result<()>
+    pub fn set_mantle_commitment_node(...) -> Result<()>
+    pub fn get_ethereum_commitment_node(...) -> Result<Option<String>>
+    pub fn get_mantle_commitment_node(...) -> Result<Option<String>>
+
+    // ❌ DELETE - Duplicates with wrong names
+    pub fn get_ethereum_tree(&self) -> Result<Vec<String>>  // Use get_all_commitments_for_chain("ethereum")
+    pub fn get_mantle_tree(&self) -> Result<Vec<String>>    // Use get_all_commitments_for_chain("mantle")
+    pub fn get_ethereum_tree_size(&self) -> Result<usize>   // Use get_tree_size("ethereum_commitments")
+    pub fn get_mantle_tree_size(&self) -> Result<usize>     // Use get_tree_size("mantle_commitments")
+    pub fn add_to_ethereum_tree(&self, _intent_id: &str) -> Result<()>
+    pub fn add_to_mantle_tree(&self, _commitment: &str) -> Result<()>
+    pub fn set_ethereum_node(...) -> Result<()>
+    pub fn set_mantle_node(...) -> Result<()>
+    pub fn get_ethereum_node(...) -> Result<Option<String>>
+    pub fn get_mantle_node(...) -> Result<Option<String>>
+
+    // ❌ DELETE - Wrong implementation (uses intents table instead of event tables)
+    pub fn get_all_ethereum_intents(&self) -> Result<Vec<EthereumIntent>>
+    pub fn get_all_mantle_intents(&self) -> Result<Vec<MantleIntent>>
+
+         */
     // ==================== Intent CRUD Operations ====================
 
     pub fn create_intent(&self, intent: &Intent) -> Result<()> {
@@ -149,10 +197,14 @@ impl Database {
             deadline: intent.deadline as i64,
             refund_address: intent.refund_address.as_deref(),
             solver_address: intent.solver_address.as_deref(),
+            block_number: intent.block_number,
+            log_index: intent.log_index,
         };
 
         diesel::insert_into(intents::table)
             .values(&new_intent)
+            .on_conflict(intents::id)
+            .do_nothing()
             .execute(&mut conn)
             .context("Failed to create intent")?;
 
@@ -186,10 +238,14 @@ impl Database {
                 deadline: intent.deadline as i64,
                 refund_address: intent.refund_address.as_deref(),
                 solver_address: intent.solver_address.as_deref(),
+                block_number: intent.block_number,
+                log_index: intent.log_index,
             };
 
             diesel::insert_into(intents::table)
                 .values(&new_intent)
+                .on_conflict(intents::id)
+                .do_nothing()
                 .execute(conn)
                 .context("Failed to insert intent")?;
 
@@ -211,6 +267,132 @@ impl Database {
 
             Ok(())
         })?;
+
+        Ok(())
+    }
+
+    pub fn upsert_intent(&self, intent: &Intent) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        let exists = intents::table
+            .filter(intents::id.eq(&intent.id))
+            .select(intents::id)
+            .first::<String>(&mut conn)
+            .optional()?
+            .is_some();
+
+        if exists {
+            diesel::update(intents::table.filter(intents::id.eq(&intent.id)))
+                .set((
+                    intents::user_address.eq(&intent.user_address),
+                    intents::block_number.eq(intent.block_number),
+                    intents::log_index.eq(intent.log_index),
+                    intents::deadline.eq(intent.deadline as i64),
+                    intents::updated_at.eq(Utc::now()),
+                ))
+                .execute(&mut conn)
+                .context("Failed to update intent")?;
+        } else {
+            let new_intent = NewIntent {
+                id: &intent.id,
+                user_address: &intent.user_address,
+                source_chain: &intent.source_chain,
+                dest_chain: &intent.dest_chain,
+                source_token: &intent.source_token,
+                dest_token: &intent.dest_token,
+                amount: &intent.amount,
+                dest_amount: &intent.dest_amount,
+                source_commitment: intent.source_commitment.as_deref(),
+                dest_fill_txid: None,
+                dest_registration_txid: None,
+                source_complete_txid: None,
+                status: "committed",
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                deadline: intent.deadline as i64,
+                refund_address: intent.refund_address.as_deref(),
+                solver_address: None,
+                block_number: intent.block_number,
+                log_index: intent.log_index,
+            };
+
+            diesel::insert_into(intents::table)
+                .values(&new_intent)
+                .execute(&mut conn)
+                .context("Failed to create intent")?;
+        }
+
+        Ok(())
+    }
+
+    ///     EVENT SYNC
+    pub fn upsert_intent_from_event(
+        &self,
+        event: &IntentCreatedEvent,
+        src_chain: &str,
+    ) -> Result<()> {
+        use crate::models::schema::intents::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let default_deadline = chrono::Utc::now().timestamp() + 3600;
+
+        let new_intent = NewIntent {
+            id: &event.intent_id,
+            user_address: "0x0000000000000000000000000000000000000000",
+            source_chain: src_chain,
+            dest_chain: &event.dest_chain.to_string(),
+            source_token: &event.source_token,
+            dest_token: &event.dest_token,
+            amount: &event.source_amount,
+            dest_amount: &event.dest_amount,
+            source_commitment: Some(&event.commitment),
+            dest_fill_txid: None,
+            dest_registration_txid: None,
+            source_complete_txid: None,
+            status: "committed",
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deadline: event
+                .deadline
+                .filter(|d| *d > 0)
+                .map(|d| d as i64)
+                .unwrap_or(default_deadline),
+            refund_address: None,
+            solver_address: None,
+            block_number: event.block_number.map(|b| b as i64),
+            log_index: event.log_index.map(|i| i as i32),
+        };
+
+        let inserted: Option<DbIntent> = diesel::insert_into(intents)
+            .values(&new_intent)
+            .on_conflict(id)
+            .do_nothing()
+            .returning(DbIntent::as_select())
+            .get_result(&mut conn)
+            .optional()?;
+
+        if inserted.is_some() {
+            info!(
+                "✅ Inserted intent {} from chain event",
+                &event.intent_id[..10]
+            );
+        } else {
+            info!(
+                "ℹ️ Intent {} already exists, skipping",
+                &event.intent_id[..10]
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn clear_all_intents_for_chain(&self, chain_name: &str) -> Result<()> {
+        use crate::models::schema::intents::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(intents.filter(source_chain.eq(chain_name))).execute(&mut conn)?;
+
+        info!("🗑️  Cleared all intents for chain {}", chain_name);
 
         Ok(())
     }
@@ -286,11 +468,24 @@ impl Database {
         Ok(result.map(db_intent_to_model))
     }
 
+    pub fn get_intents_by_status(&self, status: IntentStatus) -> Result<Vec<Intent>> {
+        let mut conn = self.get_connection()?;
+
+        let results = intents::table
+            .filter(intents::status.eq(status.as_str()))
+            .order(intents::created_at.asc())
+            .select(DbIntent::as_select())
+            .load::<DbIntent>(&mut conn)
+            .context("Failed to get intents by status")?;
+
+        Ok(results.into_iter().map(db_intent_to_model).collect())
+    }
+
     pub fn get_pending_intents(&self) -> Result<Vec<Intent>> {
         let mut conn = self.get_connection()?;
 
         let results = intents::table
-            .filter(intents::status.eq_any(vec!["created", "filled"]))
+            .filter(intents::status.eq_any(vec!["created", "committed", "filled", "solver_paid"]))
             .select(DbIntent::as_select())
             .load::<DbIntent>(&mut conn)
             .context("Failed to get pending intents")?;
@@ -368,9 +563,18 @@ impl Database {
         recipient: &str,
     ) -> Result<()> {
         let mut conn = self.get_connection()?;
+        let normalized_id = intent_id.to_lowercase();
+
+        if normalized_id.len() < 66 {
+            warn!(
+                "⚠️ Storing privacy params with a short ID: {} (length: {}). This may not match indexer records!",
+                normalized_id,
+                normalized_id.len()
+            );
+        }
 
         let new_params = NewIntentPrivacyParams {
-            intent_id,
+            intent_id: &normalized_id,
             commitment: Some(commitment),
             secret: Some(secret),
             nullifier: Some(nullifier),
@@ -393,8 +597,9 @@ impl Database {
                 intent_privacy_params::updated_at.eq(chrono::Utc::now()),
             ))
             .execute(&mut conn)
-            .context("Failed to store/update privacy params")?;
+            .context("Failed to store privacy params")?;
 
+        info!("✅ Privacy params stored for intent: {}", normalized_id);
         Ok(())
     }
 
@@ -425,34 +630,15 @@ impl Database {
     pub fn update_intent(&self, intent: &Intent) -> Result<()> {
         let mut conn = self.get_connection()?;
 
-        let new_intent = NewIntent {
-            id: &intent.id,
-            user_address: &intent.user_address,
-            source_chain: &intent.source_chain,
-            dest_chain: &intent.dest_chain,
-            source_token: &intent.source_token,
-            dest_token: &intent.dest_token,
-            amount: &intent.amount,
-            dest_amount: &intent.dest_amount,
-            source_commitment: intent.source_commitment.as_deref(),
-            dest_fill_txid: intent.dest_fill_txid.as_deref(),
-            dest_registration_txid: intent.dest_fill_txid.as_deref(),
-            source_complete_txid: intent.source_complete_txid.as_deref(),
-            status: intent.status.as_str(),
-            created_at: intent.created_at,
-            updated_at: intent.updated_at,
-            deadline: intent.deadline as i64,
-            refund_address: intent.refund_address.as_deref(),
-            solver_address: intent.solver_address.as_deref(),
-        };
-
         diesel::update(intents::table.filter(intents::id.eq(&intent.id)))
             .set((
-                intents::source_commitment.eq(new_intent.source_commitment),
-                intents::dest_fill_txid.eq(new_intent.dest_fill_txid),
-                intents::source_complete_txid.eq(new_intent.source_complete_txid),
-                intents::status.eq(new_intent.status),
-                intents::updated_at.eq(new_intent.updated_at),
+                intents::status.eq(intent.status.as_str()),
+                intents::solver_address.eq(intent.solver_address.as_deref()),
+                intents::dest_fill_txid.eq(intent.dest_fill_txid.as_deref()),
+                intents::source_complete_txid.eq(intent.source_complete_txid.as_deref()),
+                intents::dest_registration_txid.eq(intent.dest_registration_txid.as_deref()),
+                intents::source_commitment.eq(intent.source_commitment.as_deref()),
+                intents::updated_at.eq(intent.updated_at),
             ))
             .execute(&mut conn)
             .context("Failed to update intent")?;
@@ -467,10 +653,11 @@ impl Database {
         chain: &str,
         tx_hash: &str,
         block_number: u64,
+        log_index: Option<i32>,
     ) -> Result<()> {
         let chain_id = match chain {
-            "ethereum" => 11155111, // Ethereum Sepolia
-            "mantle" => 5003,       // Mantle Sepolia
+            "ethereum" => 11155111,
+            "mantle" => 5003,
             _ => 0,
         };
 
@@ -478,15 +665,10 @@ impl Database {
             "intent_id": intent_id,
             "event_type": event_type,
             "chain": chain,
+            "block_number": block_number,
         });
 
-        let event_id = format!(
-            "{}_{}_{}_{}",
-            event_type,
-            intent_id,
-            chain,
-            chrono::Utc::now().timestamp()
-        );
+        let event_id = format!("{}_{}_{}_{}", event_type, chain, tx_hash, block_number);
 
         self.store_bridge_event(
             &event_id,
@@ -494,23 +676,36 @@ impl Database {
             event_type,
             event_data,
             chain_id,
-            block_number,
+            block_number as i64,
+            log_index,
             tx_hash,
         )
     }
 
-    pub fn update_dest_registration_txid(
-        &self,
-        intent_id: &str,
-        txid: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::models::schema::intents::dsl::*;
+    pub fn update_dest_registration_txid(&self, intent_id: &str, txid: &str) -> Result<()> {
+        let mut conn = self.get_connection()?;
 
-        let mut conn = self.pool.get()?;
+        diesel::update(intents::table.filter(intents::id.eq(intent_id)))
+            .set((
+                intents::dest_registration_txid.eq(txid),
+                intents::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to update dest registration txid")?;
 
-        diesel::update(intents.filter(id.eq(intent_id)))
-            .set(dest_registration_txid.eq(Some(txid)))
-            .execute(&mut conn)?;
+        Ok(())
+    }
+
+    pub fn update_source_settlement_txid(&self, intent_id: &str, txid: &str) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(intents::table.filter(intents::id.eq(intent_id)))
+            .set((
+                intents::source_settlement_txid.eq(txid),
+                intents::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to update source settlement txid")?;
 
         Ok(())
     }
@@ -536,6 +731,7 @@ impl Database {
             event_data,
             0,
             0,
+            Some(0),
             tx_hash,
         )
     }
@@ -557,15 +753,15 @@ impl Database {
     pub fn update_intent_with_solver(
         &self,
         intent_id: &str,
-        solver_address: &str,
-        status: IntentStatus,
+        solver: &str,
+        new_status: IntentStatus,
     ) -> Result<()> {
         let mut conn = self.get_connection()?;
 
         diesel::update(intents::table.filter(intents::id.eq(intent_id)))
             .set((
-                intents::solver_address.eq(solver_address),
-                intents::status.eq(status.as_str()),
+                intents::solver_address.eq(Some(solver)),
+                intents::status.eq(new_status.as_str()),
                 intents::updated_at.eq(Utc::now()),
             ))
             .execute(&mut conn)
@@ -680,9 +876,10 @@ impl Database {
         event_id: &str,
         intent_id: Option<&str>,
         event_type: &str,
-        event_data: serde_json::Value,
-        chain_id: u32,
-        block_number: u64,
+        event_data: Value,
+        chain_id: i32,
+        block_number: i64,
+        log_index: Option<i32>,
         transaction_hash: &str,
     ) -> Result<()> {
         let mut conn = self.get_connection()?;
@@ -692,8 +889,9 @@ impl Database {
             intent_id,
             event_type,
             event_data,
-            chain_id: chain_id as i32,
-            block_number: block_number as i64,
+            chain_id,
+            block_number,
+            log_index,
             transaction_hash,
             timestamp: Utc::now(),
             created_at: Utc::now(),
@@ -701,7 +899,13 @@ impl Database {
 
         diesel::insert_into(bridge_events::table)
             .values(&new_event)
+            .on_conflict(bridge_events::event_id)
+            .do_nothing() // Idempotency: if event_id exists, skip
             .execute(&mut conn)
+            .map_err(|e| {
+                error!("🔴 DB INSERT FAILED: event_id={}, error={}", event_id, e);
+                e
+            })
             .context("Failed to store bridge event")?;
 
         Ok(())
@@ -730,6 +934,24 @@ impl Database {
             .context("Failed to get bridge event by nullifier")?;
 
         Ok(result)
+    }
+
+    pub fn insert_root_sync(&self, sync_type: &str, root: &str, tx_hash: &str) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        let new_sync = NewRootSync {
+            sync_type,
+            root,
+            tx_hash,
+            created_at: Utc::now(),
+        };
+
+        diesel::insert_into(root_syncs::table)
+            .values(&new_sync)
+            .execute(&mut conn)
+            .context("Failed to insert root sync")?;
+
+        Ok(())
     }
 
     // ==================== Indexer Checkpoints ====================
@@ -830,6 +1052,20 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_merkle_root_by_name(&self, tree_name: &str, root: &str) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(merkle_trees::table.filter(merkle_trees::tree_name.eq(tree_name)))
+            .set((
+                merkle_trees::root.eq(root),
+                merkle_trees::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to update merkle root by name")?;
+
+        Ok(())
+    }
+
     pub fn increment_leaf_count(&self, tree_id: i32, count: i64) -> Result<()> {
         let mut conn = self.get_connection()?;
 
@@ -850,8 +1086,21 @@ impl Database {
         Ok(tree.leaf_count as usize)
     }
 
+    pub fn get_mantle_commitment_tree_size(&self) -> Result<usize> {
+        let tree = self.ensure_merkle_tree("mantle_commitments", TREE_DEPTH)?;
+
+        Ok(tree.leaf_count as usize)
+    }
+
     pub fn add_to_ethereum_commitment_tree(&self, _commitment: &str) -> Result<()> {
         let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        self.increment_leaf_count(tree.tree_id, 1)?;
+        Ok(())
+    }
+
+    pub fn add_to_mantle_commitment_tree(&self, _commitment: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("mantle_commitments", TREE_DEPTH)?;
 
         self.increment_leaf_count(tree.tree_id, 1)?;
         Ok(())
@@ -869,12 +1118,26 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_mantle_commitment_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("mantle_commitments", TREE_DEPTH)?;
+
+        self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
+        Ok(())
+    }
+
     pub fn get_ethereum_commitment_node(
         &self,
         level: usize,
         index: usize,
     ) -> Result<Option<String>> {
         let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+
+        let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
+        Ok(node.map(|n| n.hash))
+    }
+
+    pub fn get_mantle_commitment_node(&self, level: usize, index: usize) -> Result<Option<String>> {
+        let tree = self.ensure_merkle_tree("mantle_commitments", TREE_DEPTH)?;
 
         let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
         Ok(node.map(|n| n.hash))
@@ -890,6 +1153,20 @@ impl Database {
         diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
             .execute(&mut conn)
             .context("Failed to clear ethereum commitment nodes")?;
+
+        Ok(())
+    }
+
+    pub fn clear_mantle_commitment_nodes(&self) -> Result<()> {
+        use crate::models::schema::merkle_nodes;
+
+        let mut conn = self.get_connection()?;
+
+        let tree = self.ensure_merkle_tree("mantle_commitments", TREE_DEPTH)?;
+
+        diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
+            .execute(&mut conn)
+            .context("Failed to clear mantle commitment nodes")?;
 
         Ok(())
     }
@@ -911,11 +1188,214 @@ impl Database {
         Ok(())
     }
 
+    pub fn clear_mantle_commitment_tree(&self) -> Result<()> {
+        use crate::models::schema::merkle_trees;
+
+        let mut conn = self.get_connection()?;
+
+        let tree = self.ensure_merkle_tree("mantle_commitments", TREE_DEPTH)?;
+
+        self.clear_mantle_commitment_nodes()?;
+
+        diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
+            .set(merkle_trees::leaf_count.eq(0))
+            .execute(&mut conn)
+            .context("Failed to reset mantle commitment tree leaf count")?;
+
+        Ok(())
+    }
+
     pub fn get_ethereum_commitment_tree(&self) -> Result<Vec<String>> {
         let _tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
         let commitments = self.get_all_ethereum_commitments()?;
 
         Ok(commitments)
+    }
+
+    pub fn get_mantle_commitment_tree(&self) -> Result<Vec<String>> {
+        let _tree = self.ensure_merkle_tree("mantle_commitments", TREE_DEPTH)?;
+        let commitments = self.get_all_mantle_commitments()?;
+
+        Ok(commitments)
+    }
+
+    pub fn get_ethereum_intent_tree_size(&self) -> Result<usize> {
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
+        Ok(tree.leaf_count as usize)
+    }
+
+    pub fn get_ethereum_fill_tree_size(&self) -> Result<usize> {
+        let tree = self.ensure_merkle_tree("ethereum_fills", TREE_DEPTH)?;
+        Ok(tree.leaf_count as usize)
+    }
+
+    pub fn add_to_ethereum_intent_tree(&self, _commitment: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
+        self.increment_leaf_count(tree.tree_id, 1)?;
+        Ok(())
+    }
+
+    pub fn add_to_ethereum_fill_tree(&self, _intent_id: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_fills", TREE_DEPTH)?;
+        self.increment_leaf_count(tree.tree_id, 1)?;
+        Ok(())
+    }
+
+    pub fn set_ethereum_intent_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
+        self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
+        Ok(())
+    }
+
+    pub fn set_ethereum_fill_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
+        let tree = self.ensure_merkle_tree("ethereum_fills", TREE_DEPTH)?;
+        self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
+        Ok(())
+    }
+
+    pub fn get_ethereum_intent_node(&self, level: usize, index: usize) -> Result<Option<String>> {
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
+        let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
+        Ok(node.map(|n| n.hash))
+    }
+
+    pub fn get_ethereum_fill_node(&self, level: usize, index: usize) -> Result<Option<String>> {
+        let tree = self.ensure_merkle_tree("ethereum_fills", TREE_DEPTH)?;
+        let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
+        Ok(node.map(|n| n.hash))
+    }
+
+    pub fn get_ethereum_intent_tree(&self) -> Result<Vec<String>> {
+        use crate::models::schema::merkle_nodes;
+
+        let mut conn = self.get_connection()?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
+
+        let nodes = merkle_nodes::table
+            .filter(merkle_nodes::tree_id.eq(tree.tree_id))
+            .filter(merkle_nodes::level.eq(0))
+            .order(merkle_nodes::node_index.asc())
+            .select(DbMerkleNode::as_select())
+            .load::<DbMerkleNode>(&mut conn)
+            .context("Failed to get ethereum intent tree leaves")?;
+
+        Ok(nodes.into_iter().map(|n| n.hash).collect())
+    }
+
+    pub fn get_ethereum_fill_tree(&self) -> Result<Vec<String>> {
+        use crate::models::schema::merkle_nodes;
+
+        let mut conn = self.get_connection()?;
+        let tree = self.ensure_merkle_tree("ethereum_fills", TREE_DEPTH)?;
+
+        let nodes = merkle_nodes::table
+            .filter(merkle_nodes::tree_id.eq(tree.tree_id))
+            .filter(merkle_nodes::level.eq(0))
+            .order(merkle_nodes::node_index.asc())
+            .select(DbMerkleNode::as_select())
+            .load::<DbMerkleNode>(&mut conn)
+            .context("Failed to get ethereum fill tree leaves")?;
+
+        Ok(nodes.into_iter().map(|n| n.hash).collect())
+    }
+
+    pub fn clear_ethereum_intent_tree(&self) -> Result<()> {
+        use crate::models::schema::merkle_trees;
+
+        let mut conn = self.get_connection()?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
+
+        self.clear_ethereum_intent_nodes()?;
+
+        diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
+            .set(merkle_trees::leaf_count.eq(0))
+            .execute(&mut conn)
+            .context("Failed to reset ethereum intent tree leaf count")?;
+
+        Ok(())
+    }
+
+    pub fn clear_ethereum_fill_tree(&self) -> Result<()> {
+        use crate::models::schema::merkle_trees;
+
+        let mut conn = self.get_connection()?;
+        let tree = self.ensure_merkle_tree("ethereum_fills", TREE_DEPTH)?;
+
+        self.clear_ethereum_fill_nodes()?;
+
+        diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
+            .set(merkle_trees::leaf_count.eq(0))
+            .execute(&mut conn)
+            .context("Failed to reset ethereum fill tree leaf count")?;
+
+        Ok(())
+    }
+
+    pub fn clear_ethereum_intent_nodes(&self) -> Result<()> {
+        use crate::models::schema::merkle_nodes;
+
+        let mut conn = self.get_connection()?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
+
+        diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
+            .execute(&mut conn)
+            .context("Failed to clear ethereum intent nodes")?;
+
+        Ok(())
+    }
+
+    pub fn clear_ethereum_fill_nodes(&self) -> Result<()> {
+        use crate::models::schema::merkle_nodes;
+
+        let mut conn = self.get_connection()?;
+        let tree = self.ensure_merkle_tree("ethereum_fills", TREE_DEPTH)?;
+
+        diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
+            .execute(&mut conn)
+            .context("Failed to clear ethereum fill nodes")?;
+
+        Ok(())
+    }
+
+    pub fn clear_merkle_tree_completely(&self, tree_name: &str) -> Result<()> {
+        use crate::models::schema::{merkle_nodes, merkle_trees};
+
+        let mut conn = self.get_connection()?;
+
+        // Use transaction for atomicity
+        conn.transaction::<_, anyhow::Error, _>(|conn| {
+            let tree = merkle_trees::table
+                .filter(merkle_trees::tree_name.eq(tree_name))
+                .select(DbMerkleTree::as_select())
+                .first::<DbMerkleTree>(conn)
+                .optional()
+                .context("Failed to get tree")?;
+
+            if let Some(tree) = tree {
+                // Clear all nodes
+                diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
+                    .execute(conn)
+                    .context("Failed to clear merkle nodes")?;
+
+                // Reset tree metadata
+                diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
+                    .set((
+                        merkle_trees::leaf_count.eq(0),
+                        merkle_trees::root.eq(
+                            "0x0000000000000000000000000000000000000000000000000000000000000000",
+                        ),
+                        merkle_trees::updated_at.eq(Utc::now()),
+                    ))
+                    .execute(conn)
+                    .context("Failed to reset tree metadata")?;
+
+                info!("🗑️  Cleared tree '{}' completely", tree_name);
+            }
+
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     // ==================== Merkle Nodes ====================
@@ -1020,6 +1500,65 @@ impl Database {
 
         Ok(())
     }
+    pub fn clear_merkle_nodes_by_tree(&self, target_tree_id: i32) -> Result<()> {
+        use crate::models::schema::merkle_nodes;
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(target_tree_id)))
+            .execute(&mut conn)
+            .context("Failed to clear merkle nodes for the specified tree")?;
+        Ok(())
+    }
+
+    pub fn reset_leaf_count(&self, tree_id: i32) -> Result<()> {
+        self.set_leaf_count(tree_id, 0)
+    }
+
+    pub fn set_leaf_count(&self, tree_id: i32, count: i64) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree_id)))
+            .set((
+                merkle_trees::leaf_count.eq(count),
+                merkle_trees::updated_at.eq(Utc::now()),
+            ))
+            .execute(&mut conn)
+            .context("Failed to set leaf count")?;
+
+        Ok(())
+    }
+
+    pub fn get_tree_size(&self, tree_name: &str) -> Result<usize> {
+        let tree = self
+            .get_merkle_tree_by_name(tree_name)?
+            .ok_or_else(|| anyhow!("Tree '{}' not found", tree_name))?;
+
+        Ok(tree.leaf_count as usize)
+    }
+
+    pub fn verify_tree_consistency(&self, tree_name: &str) -> Result<bool> {
+        let tree = self
+            .get_merkle_tree_by_name(tree_name)?
+            .ok_or_else(|| anyhow!("Tree '{}' not found", tree_name))?;
+
+        let chain = if tree_name.contains("mantle") {
+            "mantle"
+        } else {
+            "ethereum"
+        };
+
+        let actual_commitments = self.get_all_commitments_for_chain(chain)?;
+        let tree_leaf_count = tree.leaf_count as usize;
+
+        info!(
+            "🔍 Tree '{}': metadata says {} leaves, database has {} commitments",
+            tree_name,
+            tree_leaf_count,
+            actual_commitments.len()
+        );
+
+        Ok(tree_leaf_count == actual_commitments.len())
+    }
 
     // ==================== Merkle Tree Operations ====================
 
@@ -1029,7 +1568,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("mantle_intents", TREE_DEPTH)?;
 
         let nodes = merkle_nodes::table
             .filter(merkle_nodes::tree_id.eq(tree.tree_id))
@@ -1048,7 +1587,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
 
         let nodes = merkle_nodes::table
             .filter(merkle_nodes::tree_id.eq(tree.tree_id))
@@ -1063,21 +1602,21 @@ impl Database {
 
     /// Get Mantle tree size (leaf count)
     pub fn get_mantle_tree_size(&self) -> Result<usize> {
-        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("mantle_intents", TREE_DEPTH)?;
 
         Ok(tree.leaf_count as usize)
     }
 
     /// Get Ethereum tree size (leaf count)
     pub fn get_ethereum_tree_size(&self) -> Result<usize> {
-        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
 
         Ok(tree.leaf_count as usize)
     }
 
     /// Add leaf to Mantle tree and increment counter
     pub fn add_to_mantle_tree(&self, _commitment: &str) -> Result<()> {
-        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("mantle_intents", TREE_DEPTH)?;
 
         self.increment_leaf_count(tree.tree_id, 1)?;
         Ok(())
@@ -1085,7 +1624,7 @@ impl Database {
 
     /// Add leaf to Ethereum tree and increment counter
     pub fn add_to_ethereum_tree(&self, _intent_id: &str) -> Result<()> {
-        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
 
         self.increment_leaf_count(tree.tree_id, 1)?;
         Ok(())
@@ -1093,7 +1632,7 @@ impl Database {
 
     /// Set Mantle node at specific level and index
     pub fn set_mantle_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
-        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("mantle_intents", TREE_DEPTH)?;
 
         self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
         Ok(())
@@ -1101,7 +1640,7 @@ impl Database {
 
     /// Set Ethereum node at specific level and index
     pub fn set_ethereum_node(&self, level: usize, index: usize, hash: &str) -> Result<()> {
-        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
 
         self.store_merkle_node(tree.tree_id, level as i32, index as i64, hash)?;
         Ok(())
@@ -1109,7 +1648,7 @@ impl Database {
 
     /// Get Mantle node at specific level and index
     pub fn get_mantle_node(&self, level: usize, index: usize) -> Result<Option<String>> {
-        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("mantle_intents", TREE_DEPTH)?;
 
         let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
         Ok(node.map(|n| n.hash))
@@ -1117,7 +1656,7 @@ impl Database {
 
     /// Get Ethereum node at specific level and index
     pub fn get_ethereum_node(&self, level: usize, index: usize) -> Result<Option<String>> {
-        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("ethereum_intents", TREE_DEPTH)?;
 
         let node = self.get_merkle_node(tree.tree_id, level as i32, index as i64)?;
         Ok(node.map(|n| n.hash))
@@ -1129,7 +1668,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("mantle_intents", TREE_DEPTH)?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
             .set((
@@ -1145,12 +1684,12 @@ impl Database {
     }
 
     /// Clear Ethereum tree (reset leaf count and root)
-    pub fn clear_ethereum_tree(&self) -> Result<()> {
+    pub fn clear_ethereum_tree(&self, tree_name: &str) -> Result<()> {
         use crate::models::schema::merkle_trees;
 
         let mut conn = self.get_connection()?;
 
-        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree(tree_name, TREE_DEPTH)?;
 
         diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree.tree_id)))
             .set((
@@ -1171,7 +1710,7 @@ impl Database {
 
         let mut conn = self.get_connection()?;
 
-        let tree = self.ensure_merkle_tree("mantle", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree("mantle_intents", TREE_DEPTH)?;
 
         diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
             .execute(&mut conn)
@@ -1180,12 +1719,12 @@ impl Database {
         Ok(())
     }
 
-    pub fn clear_ethereum_nodes(&self) -> Result<()> {
+    pub fn clear_ethereum_nodes(&self, tree_name: &str) -> Result<()> {
         use crate::models::schema::merkle_nodes;
 
         let mut conn = self.get_connection()?;
 
-        let tree = self.ensure_merkle_tree("ethereum_commitments", TREE_DEPTH)?;
+        let tree = self.ensure_merkle_tree(tree_name, TREE_DEPTH)?;
 
         diesel::delete(merkle_nodes::table.filter(merkle_nodes::tree_id.eq(tree.tree_id)))
             .execute(&mut conn)?;
@@ -1194,8 +1733,6 @@ impl Database {
     }
 
     pub fn record_root(&self, chain: &str, root: &str) -> Result<()> {
-        // let mut conn = self.get_connection()?;
-
         let tree = self
             .get_merkle_tree_by_name(chain)?
             .ok_or_else(|| anyhow::anyhow!("Tree {} not found", chain))?;
@@ -1240,40 +1777,11 @@ impl Database {
             event_data,
             0, // Chain ID 0 for cross-chain syncs
             0, // Block number not applicable
+            Some(0),
             tx_hash,
         )?;
 
         Ok(())
-    }
-
-    pub fn get_all_mantle_intents(&self) -> Result<Vec<MantleIntent>> {
-        use crate::models::schema::bridge_events;
-
-        let mut conn = self.get_connection()?;
-
-        let events = bridge_events::table
-            .filter(bridge_events::event_type.eq("intent_created"))
-            .filter(bridge_events::chain_id.eq(5003)) // Mantle Sepolia chain ID
-            .order((
-                bridge_events::block_number.asc(),
-                bridge_events::created_at.asc(),
-            ))
-            .select(bridge_events::all_columns)
-            .load::<DbBridgeEvent>(&mut conn)?;
-
-        let intents: Vec<MantleIntent> = events
-            .into_iter()
-            .filter_map(|e| {
-                let commitment = e.event_data.get("commitment")?.as_str()?;
-                Some(MantleIntent {
-                    commitment: commitment.to_string(),
-                    block_number: e.block_number as u64,
-                    log_index: 0,
-                })
-            })
-            .collect();
-
-        Ok(intents)
     }
 
     pub fn get_all_mantle_fills(&self) -> Result<Vec<MantleFill>> {
@@ -1287,6 +1795,7 @@ impl Database {
             .order((
                 bridge_events::block_number.asc(),
                 bridge_events::created_at.asc(),
+                bridge_events::id.asc(),
             ))
             .select(bridge_events::all_columns)
             .load::<DbBridgeEvent>(&mut conn)?;
@@ -1311,41 +1820,6 @@ impl Database {
         Ok(fills)
     }
 
-    pub fn get_all_ethereum_intents(&self) -> Result<Vec<EthereumIntent>> {
-        use crate::models::schema::bridge_events;
-
-        let mut conn = self.get_connection()?;
-
-        let events = bridge_events::table
-            .filter(bridge_events::event_type.eq("intent_created"))
-            .filter(bridge_events::chain_id.eq(11155111)) // Ethereum Sepolia chain ID
-            .order((
-                bridge_events::block_number.asc(),
-                bridge_events::created_at.asc(),
-            ))
-            .select(bridge_events::all_columns)
-            .load::<DbBridgeEvent>(&mut conn)?;
-
-        let intents: Vec<EthereumIntent> = events
-            .into_iter()
-            .filter_map(|e| {
-                let commitment = e.event_data.get("commitment")?.as_str()?;
-                let log_index = e
-                    .event_data
-                    .get("log_index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                Some(EthereumIntent {
-                    commitment: commitment.to_string(),
-                    block_number: e.block_number as u64,
-                    log_index,
-                })
-            })
-            .collect();
-
-        Ok(intents)
-    }
-
     pub fn get_all_ethereum_fills(&self) -> Result<Vec<EthereumFill>> {
         use crate::models::schema::bridge_events;
 
@@ -1357,6 +1831,7 @@ impl Database {
             .order((
                 bridge_events::block_number.asc(),
                 bridge_events::created_at.asc(),
+                bridge_events::id.asc(),
             ))
             .select(bridge_events::all_columns)
             .load::<DbBridgeEvent>(&mut conn)?;
@@ -1377,43 +1852,201 @@ impl Database {
     }
 
     pub fn get_all_ethereum_commitments(&self) -> Result<Vec<String>> {
+        use crate::models::schema::intents::dsl::*;
         let mut conn = self.get_connection()?;
 
-        let rows = ethereum_sepolia_intent_created::table
-            .select(DbEthereumIntentCreated::as_select())
+        let rows: Vec<Option<String>> = intents
+            .filter(
+                source_chain
+                    .eq("ethereum")
+                    .and(source_commitment.is_not_null()),
+            )
+            .select(source_commitment)
             .order((
-                ethereum_sepolia_intent_created::block_number.asc(),
-                ethereum_sepolia_intent_created::log_index.asc(),
+                block_number.asc().nulls_last(),
+                log_index.asc().nulls_last(),
             ))
-            .load::<DbEthereumIntentCreated>(&mut conn)
-            .context("Failed to load ethereum intent created events")?;
+            .load(&mut conn)?;
 
-        let commitments = rows
-            .into_iter()
-            .filter_map(|row| row.event_data.get("commitment")?.as_str().map(String::from))
-            .collect();
+        let commitments: Vec<String> = rows.into_iter().flatten().collect();
+
+        if commitments.is_empty() {
+            return Err(anyhow!(
+                "🚨 No Ethereum commitments found – Merkle tree cannot be built"
+            ));
+        }
 
         Ok(commitments)
     }
 
     pub fn get_all_mantle_commitments(&self) -> Result<Vec<String>> {
+        use crate::models::schema::intents::dsl::*;
         let mut conn = self.get_connection()?;
 
-        let rows = mantle_sepolia_intent_created::table
-            .select(DbMantleIntentCreated::as_select())
+        let rows: Vec<Option<String>> = intents
+            .filter(
+                source_chain
+                    .eq("mantle")
+                    .and(source_commitment.is_not_null()),
+            )
+            .select(source_commitment)
             .order((
-                mantle_sepolia_intent_created::block_number.asc(),
-                mantle_sepolia_intent_created::log_index.asc(),
+                block_number.asc().nulls_last(),
+                log_index.asc().nulls_last(),
             ))
-            .load::<DbMantleIntentCreated>(&mut conn)
-            .context("Failed to load mantle intent created events")?;
+            .load(&mut conn)?;
 
-        let commitments = rows
-            .into_iter()
-            .filter_map(|row| row.event_data.get("commitment")?.as_str().map(String::from))
-            .collect();
+        let commitments: Vec<String> = rows.into_iter().flatten().collect();
+
+        if commitments.is_empty() {
+            return Err(anyhow!(
+                "🚨 No Mantle commitments found – Merkle tree cannot be built"
+            ));
+        }
 
         Ok(commitments)
+    }
+
+    pub fn get_all_commitments_for_chain(&self, chain_name: &str) -> Result<Vec<String>> {
+        use crate::models::schema::intents::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let commitments: Vec<String> = intents
+            .filter(source_chain.eq(chain_name))
+            .filter(source_commitment.is_not_null())
+            .filter(block_number.is_not_null())
+            .filter(log_index.is_not_null())
+            .order((block_number.asc(), log_index.asc()))
+            .select(source_commitment)
+            .load::<Option<String>>(&mut conn)
+            .context("Failed to load commitments column from intents table")?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        info!(
+            "📊 Loaded {} commitments for chain '{}'",
+            commitments.len(),
+            chain_name
+        );
+
+        Ok(commitments)
+    }
+
+    pub fn get_commitments_for_tree(&self, chain_name: &str, limit: i64) -> Result<Vec<String>> {
+        use crate::models::schema::intents::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let commitments: Vec<String> = intents
+            .filter(source_chain.eq(chain_name))
+            .filter(source_commitment.is_not_null())
+            .filter(block_number.is_not_null()) // ✅ CRITICAL
+            .filter(log_index.is_not_null()) // ✅ CRITICAL
+            .order((block_number.asc(), log_index.asc()))
+            .limit(limit) // Only take first N commitments
+            .select(source_commitment)
+            .load::<Option<String>>(&mut conn)?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        info!(
+            "📊 Loaded {} commitments (limit: {}) for chain '{}'",
+            commitments.len(),
+            limit,
+            chain_name
+        );
+
+        Ok(commitments)
+    }
+
+    pub fn get_all_fills_for_chain(&self, chain_name: &str) -> Result<Vec<String>> {
+        use crate::models::schema::bridge_events::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let chain_id_value = match chain_name {
+            "ethereum" => 11155111,
+            "mantle" => 5003,
+            _ => return Err(anyhow!("Unknown chain: {}", chain_name)),
+        };
+
+        let fills: Vec<String> = bridge_events
+            .filter(event_type.eq("intent_filled"))
+            .filter(chain_id.eq(chain_id_value))
+            .filter(block_number.is_not_null())
+            .filter(log_index.is_not_null())
+            .order((block_number.asc(), log_index.asc()))
+            .load::<DbBridgeEvent>(&mut conn)
+            .context("Failed to load fills from bridge_events table")?
+            .into_iter()
+            .filter_map(|e| {
+                e.event_data
+                    .get("intentId")
+                    .or_else(|| e.event_data.get("intent_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .collect();
+
+        info!("📊 Loaded {} fills for chain '{}'", fills.len(), chain_name);
+
+        Ok(fills)
+    }
+
+    pub fn get_fills_for_tree(&self, chain_name: &str, limit: i64) -> Result<Vec<String>> {
+        use crate::models::schema::bridge_events::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let chain_id_value = match chain_name {
+            "ethereum" => 11155111,
+            "mantle" => 5003,
+            _ => return Err(anyhow!("Unknown chain: {}", chain_name)),
+        };
+
+        let fills: Vec<String> = bridge_events
+            .filter(event_type.eq("intent_filled"))
+            .filter(chain_id.eq(chain_id_value))
+            .filter(block_number.is_not_null())
+            .filter(log_index.is_not_null())
+            .order((block_number.asc(), log_index.asc()))
+            .limit(limit)
+            .load::<DbBridgeEvent>(&mut conn)
+            .context("Failed to load fills from bridge_events table")?
+            .into_iter()
+            .filter_map(|e| {
+                e.event_data
+                    .get("intentId")
+                    .or_else(|| e.event_data.get("intent_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .collect();
+
+        info!(
+            "📊 Loaded {} fills (limit: {}) for chain '{}'",
+            fills.len(),
+            limit,
+            chain_name
+        );
+
+        Ok(fills)
+    }
+
+    pub fn get_last_indexed_block(&self, chain: &str) -> Result<Option<u64>> {
+        use crate::models::schema::intents::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let last_block = intents
+            .filter(source_chain.eq(chain))
+            .filter(block_number.is_not_null())
+            .order(block_number.desc())
+            .select(block_number)
+            .first::<Option<i64>>(&mut conn)
+            .optional()?
+            .flatten()
+            .map(|b| b as u64);
+
+        Ok(last_block)
     }
 
     // ==================== Statistics ====================
@@ -1529,5 +2162,7 @@ fn db_intent_to_model(r: DbIntent) -> Intent {
         deadline: r.deadline as u64,
         refund_address: r.refund_address,
         solver_address: r.solver_address,
+        block_number: r.block_number,
+        log_index: r.log_index,
     }
 }

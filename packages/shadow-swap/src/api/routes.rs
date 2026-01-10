@@ -4,13 +4,14 @@ use actix_web::{HttpRequest, HttpResponse, Responder, get, post, web};
 use chrono::Utc;
 use serde_json::json;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use crate::{
     AppState,
     api::{
         helper::{
-            handle_intent_created_event, handle_intent_filled_event, handle_intent_marked_filled_event, handle_intent_refunded_event, handle_intent_registered_event, handle_root_synced_event, handle_withdrawal_claimed_event, validate_hmac
+            handle_intent_created_event, handle_intent_filled_event, handle_intent_refunded_event,
+            handle_intent_registered_event, handle_intent_settled_event, handle_root_synced_event,
+            handle_withdrawal_claimed_event, validate_hmac,
         },
         model::{
             AllPricesResponse, ConvertRequest, ConvertResponse, IndexerEventRequest,
@@ -18,7 +19,7 @@ use crate::{
             IntentStatusResponse, PriceRequest, PriceResponse, PriceSourceInfo, StatsResponse,
         },
     },
-    models::model::{Intent, IntentStatus, TokenType},
+    models::model::TokenType,
 };
 
 // ============================================================================
@@ -35,9 +36,6 @@ pub async fn initiate_bridge(
     if let Err(response) = validate_hmac(&req, &body, &app_state) {
         return response;
     }
-
-    //encrypt secret here
-
     // Parse request body
     let request: InitiateBridgeRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
@@ -52,7 +50,16 @@ pub async fn initiate_bridge(
         }
     };
 
-    let intent_id = format!("0x{}", hex::encode(Uuid::new_v4().as_bytes()));
+    let intent_id = request.intent_id.to_lowercase();
+    if !intent_id.starts_with("0x") || intent_id.len() != 66 {
+        return HttpResponse::BadRequest().json(InitiateBridgeResponse {
+            success: false,
+            intent_id: intent_id.clone(),
+            commitment: String::new(),
+            message: "Invalid intent_id format".to_string(),
+            error: Some("intent_id must be a 32-byte hex string (0x...)".to_string()),
+        });
+    }
 
     if !request.commitment.starts_with("0x") || request.commitment.len() != 66 {
         return HttpResponse::BadRequest().json(InitiateBridgeResponse {
@@ -64,7 +71,7 @@ pub async fn initiate_bridge(
         });
     }
 
-    if !request.secret.starts_with("0x") {
+    if !request.encrypted_secret.starts_with("0x") {
         return HttpResponse::BadRequest().json(InitiateBridgeResponse {
             success: false,
             intent_id: String::new(),
@@ -74,7 +81,7 @@ pub async fn initiate_bridge(
         });
     }
 
-    if !request.nullifier.starts_with("0x") {
+    if !request.encrypted_nullifier.starts_with("0x") {
         return HttpResponse::BadRequest().json(InitiateBridgeResponse {
             success: false,
             intent_id: String::new(),
@@ -125,63 +132,11 @@ pub async fn initiate_bridge(
         }
     };
 
-    let amount_u128 = match request.amount.parse::<u128>() {
-        Ok(a) => a,
-        Err(e) => {
-            return HttpResponse::BadRequest().json(InitiateBridgeResponse {
-                success: false,
-                intent_id: String::new(),
-                commitment: String::new(),
-                message: "Invalid amount format".to_string(),
-                error: Some(e.to_string()),
-            });
-        }
-    };
-
-    // (0.2% bridge fee)
-    let bridge_fee_bps = 20;
-    let fee = amount_u128 * bridge_fee_bps / 10000;
-    let dest_amount = amount_u128 - fee;
-
-    let deadline = Utc::now().timestamp() as u64 + 3600; // 1 hour
-
-    let intent = Intent {
-        id: intent_id.clone(),
-        user_address: request.user_address.clone(),
-        source_chain: request.source_chain.clone(),
-        dest_chain: request.dest_chain.clone(),
-        source_token: request.source_token.clone(),
-        dest_token: request.dest_token.clone(),
-        amount: request.amount.clone(),
-        dest_amount: dest_amount.to_string(),
-        source_commitment: Some(request.commitment.clone()),
-        dest_fill_txid: None,
-        dest_registration_txid: None,
-        source_complete_txid: None,
-        status: IntentStatus::Created,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-        deadline,
-        refund_address: Some(request.refund_address.clone()),
-        solver_address: None,
-    };
-
-    if let Err(e) = app_state.database.create_intent(&intent) {
-        error!("Failed to create intent {}: {}", intent_id, e);
-        return HttpResponse::InternalServerError().json(InitiateBridgeResponse {
-            success: false,
-            intent_id: intent_id.clone(),
-            commitment: String::new(),
-            message: "Failed to initialize bridge intent".to_string(),
-            error: Some(e.to_string()),
-        });
-    }
-
     if let Err(e) = app_state.database.store_intent_privacy_params(
         &intent_id,
         &request.commitment,
-        &request.secret,
-        &request.nullifier,
+        &request.encrypted_secret,
+        &request.encrypted_nullifier,
         &request.claim_auth,
         &request.recipient,
     ) {
@@ -325,15 +280,22 @@ pub async fn indexer_event(
         "intent_created" => handle_intent_created_event(&app_state, &request).await,
         "intent_filled" => handle_intent_filled_event(&app_state, &request).await,
         "intent_registered" => handle_intent_registered_event(&app_state, &request).await,
-        "intent_marked_filled" => handle_intent_marked_filled_event(&app_state, &request).await,
+        "intent_settled" => handle_intent_settled_event(&app_state, &request).await,
         "intent_refunded" => handle_intent_refunded_event(&app_state, &request).await,
         "withdrawal_claimed" => handle_withdrawal_claimed_event(&app_state, &request).await,
-        "root_synced" => handle_root_synced_event(&app_state, &request).await,
-        _ => HttpResponse::BadRequest().json(IndexerEventResponse {
-            success: false,
-            message: format!("Unknown event type: {}", request.event_type),
-            error: None,
-        }),
+
+        "root_synced" | "commitment_root_synced" | "fill_root_synced" => {
+            handle_root_synced_event(&app_state, &request).await
+        }
+
+        _ => {
+            warn!("Unknown event type: {}", request.event_type);
+            HttpResponse::BadRequest().json(IndexerEventResponse {
+                success: false,
+                message: format!("Unknown event type: {}", request.event_type),
+                error: None,
+            })
+        }
     }
 }
 

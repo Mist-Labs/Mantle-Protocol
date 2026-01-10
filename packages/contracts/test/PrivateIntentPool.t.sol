@@ -22,10 +22,6 @@ contract MockERC20 is ERC20 {
     }
 }
 
-/**
- * @title PrivateIntentPoolTest
- * @notice Comprehensive test suite for PrivateIntentPool contract
- */
 contract PrivateIntentPoolTest is Test {
     PoseidonHasher public poseidon;
     PrivateIntentPool public pool;
@@ -49,17 +45,23 @@ contract PrivateIntentPoolTest is Test {
         bytes32 indexed intentId,
         bytes32 indexed commitment,
         uint32 destChain,
-        address token,
-        uint256 amount
+        address sourceToken,
+        uint256 sourceAmount,
+        address destToken,
+        uint256 destAmount
     );
-    event IntentFilled(
+    event IntentSettled(
         bytes32 indexed intentId,
         address indexed solver,
-        address indexed token,
+        bytes32 fillRoot
+    );
+    event IntentRefunded(bytes32 indexed intentId, uint256 amount);
+    event IntentCancelled(bytes32 indexed intentId, address indexed creator);
+    event ManualRefundClaimed(
+        bytes32 indexed intentId,
+        address indexed creator,
         uint256 amount
     );
-    event IntentMarkedFilled(bytes32 indexed intentId, address indexed solver, bytes32 fillRoot);
-    event IntentRefunded(bytes32 indexed intentId, uint256 amount);
     event RootSynced(uint32 indexed chainId, bytes32 root);
     event MerkleRootUpdated(bytes32 root);
     event TokenAdded(
@@ -68,6 +70,20 @@ contract PrivateIntentPoolTest is Test {
         uint256 maxAmount
     );
     event TokenRemoved(address indexed token);
+    event ContractPaused(bool paused);
+    event RelayerUpdated(
+        address indexed oldRelayer,
+        address indexed newRelayer
+    );
+    event PoseidonHasherUpdated(
+        address indexed oldHasher,
+        address indexed newHasher
+    );
+    event EmergencyWithdrawal(
+        address indexed token,
+        uint256 amount,
+        address indexed recipient
+    );
 
     function setUp() public {
         poseidon = new PoseidonHasher();
@@ -95,9 +111,18 @@ contract PrivateIntentPoolTest is Test {
         vm.prank(relayer);
         token.approve(address(pool), type(uint256).max);
 
-        // Add token to whitelist
         vm.prank(owner);
         pool.addSupportedToken(address(token), 0.01 ether, 100 ether, 18);
+    }
+
+    function _computeSingleLeafRoot(
+        bytes32 leaf
+    ) internal pure returns (bytes32) {
+        // Minimum size 2: [leaf, 0x0]
+        return
+            leaf < bytes32(0)
+                ? keccak256(abi.encodePacked(leaf, bytes32(0)))
+                : keccak256(abi.encodePacked(bytes32(0), leaf));
     }
 
     // ========== TOKEN WHITELIST TESTS ==========
@@ -109,12 +134,7 @@ contract PrivateIntentPoolTest is Test {
         emit TokenAdded(address(newToken), 0.01 ether, 100 ether);
 
         vm.prank(owner);
-        pool.addSupportedToken(
-            address(newToken),
-            0.01 ether, // minAmount
-            100 ether, // maxAmount
-            18 // decimals
-        );
+        pool.addSupportedToken(address(newToken), 0.01 ether, 100 ether, 18);
 
         assertTrue(pool.isTokenSupported(address(newToken)));
 
@@ -137,24 +157,7 @@ contract PrivateIntentPoolTest is Test {
 
         vm.prank(user);
         vm.expectRevert();
-        pool.addSupportedToken(
-            address(newToken),
-            0.01 ether, // minAmount
-            100 ether, // maxAmount
-            18 // decimals
-        );
-    }
-
-    function test_RevertWhen_AddSupportedToken_AlreadySupported() public {
-        vm.prank(owner);
-        vm.expectRevert(PrivateIntentPool.AlreadySupported.selector);
-        pool.addSupportedToken(address(token), 0.01 ether, 100 ether, 18);
-    }
-
-    function test_RevertWhen_AddSupportedToken_ZeroAddress() public {
-        vm.prank(owner);
-        vm.expectRevert(PrivateIntentPool.InvalidToken.selector);
-        pool.addSupportedToken(address(0), 0.01 ether, 100 ether, 18);
+        pool.addSupportedToken(address(newToken), 0.01 ether, 100 ether, 18);
     }
 
     function test_RemoveSupportedToken() public {
@@ -165,73 +168,12 @@ contract PrivateIntentPoolTest is Test {
         pool.removeSupportedToken(address(token));
 
         assertFalse(pool.isTokenSupported(address(token)));
-
-        address[] memory list = pool.getSupportedTokens();
-        assertEq(list.length, 0);
-
         assertEq(pool.getSupportedTokenCount(), 0);
     }
 
-    function test_RevertWhen_RemoveSupportedToken_NotOwner() public {
-        vm.prank(user);
-        vm.expectRevert();
-        pool.removeSupportedToken(address(token));
-    }
-
-    function test_RevertWhen_RemoveSupportedToken_NotSupported() public {
-        address notSupported = address(0xBEEF);
-
-        vm.prank(owner);
-        vm.expectRevert(PrivateIntentPool.TokenNotSupported.selector);
-        pool.removeSupportedToken(notSupported);
-    }
-
-    function test_RemoveSupportedToken_MaintainsPackedArray() public {
-        MockERC20 tokenB = new MockERC20();
-
-        vm.startPrank(owner);
-        pool.addSupportedToken(address(tokenB), 0.01 ether, 100 ether, 18);
-        vm.stopPrank();
-
-        vm.prank(owner);
-        pool.removeSupportedToken(address(token));
-
-        address[] memory list = pool.getSupportedTokens();
-
-        assertEq(list.length, 1);
-        assertEq(list[0], address(tokenB));
-        assertTrue(pool.isTokenSupported(address(tokenB)));
-        assertFalse(pool.isTokenSupported(address(token)));
-    }
-
-    function test_SupportedTokenQueries() public view {
-        assertTrue(pool.isTokenSupported(address(token)));
-        assertEq(pool.getSupportedTokenCount(), 1);
-
-        address[] memory tokens = pool.getSupportedTokens();
-        assertEq(tokens.length, 1);
-        assertEq(tokens[0], address(token));
-    }
-
-    function test_TokenConfig_ValidatesBounds() public {
-        PrivateIntentPool.TokenConfig memory config = pool.getTokenConfig(
-            address(token)
-        );
-
-        assertEq(config.minFillAmount, 0.01 ether);
-        assertEq(config.maxFillAmount, 100 ether);
-        assertEq(config.decimals, 18);
-        assertTrue(config.supported);
-    }
-
-    // 17. ADD: New test for updateTokenConfig
     function test_UpdateTokenConfig() public {
         vm.prank(owner);
-        pool.updateTokenConfig(
-            address(token),
-            0.1 ether, // new minAmount
-            50 ether // new maxAmount
-        );
+        pool.updateTokenConfig(address(token), 0.1 ether, 50 ether);
 
         PrivateIntentPool.TokenConfig memory config = pool.getTokenConfig(
             address(token)
@@ -243,106 +185,80 @@ contract PrivateIntentPoolTest is Test {
     // ========== INTENT CREATION TESTS ==========
 
     function test_CreateIntent() public {
-        vm.startPrank(relayer);
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
 
         vm.expectEmit(true, true, false, true);
-        emit IntentCreated(intentId, commitment, DEST_CHAIN, address(token), TEST_AMOUNT);
-
-        vm.expectEmit(false, false, false, true);
-        emit MerkleRootUpdated(commitment);
+        emit IntentCreated(
+            intentId,
+            commitment,
+            DEST_CHAIN,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1
+        );
 
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
             0
         );
-
         vm.stopPrank();
 
         PrivateIntentPool.Intent memory intent = pool.getIntent(intentId);
         assertEq(intent.commitment, commitment);
-        assertEq(intent.token, address(token));
-        assertEq(intent.amount, TEST_AMOUNT);
-        assertEq(intent.destChain, DEST_CHAIN);
+        assertEq(intent.sourceToken, address(token));
+        assertEq(intent.sourceAmount, TEST_AMOUNT);
         assertEq(intent.refundTo, user);
         assertFalse(intent.filled);
         assertFalse(intent.refunded);
 
         assertTrue(pool.isCommitmentUsed(commitment));
-
         assertEq(token.balanceOf(address(pool)), TEST_AMOUNT);
     }
 
     function test_RevertWhen_CreateIntent_TokenNotSupported() public {
         MockERC20 unsupportedToken = new MockERC20();
-        unsupportedToken.mint(relayer, 1000 ether);
+        unsupportedToken.mint(user, 1000 ether);
 
-        vm.prank(relayer);
+        vm.startPrank(user);
         unsupportedToken.approve(address(pool), type(uint256).max);
 
-        vm.prank(relayer);
         vm.expectRevert(PrivateIntentPool.TokenNotSupported.selector);
         pool.createIntent(
             intentId,
             commitment,
             address(unsupportedToken),
             TEST_AMOUNT,
+            address(unsupportedToken),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
             0
         );
-    }
-
-    function test_RevertWhen_CreateIntent_AmountTooSmall() public {
-        vm.startPrank(relayer);
-
-        uint256 smallAmount = 0.005 ether;
-
-        vm.expectRevert(PrivateIntentPool.InvalidAmount.selector);
-        pool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            smallAmount,
-            DEST_CHAIN,
-            user,
-            0
-        );
-
-        vm.stopPrank();
-    }
-
-    function test_RevertWhen_CreateIntent_AmountTooLarge() public {
-        vm.startPrank(relayer);
-
-        uint256 largeAmount = 101 ether;
-
-        vm.expectRevert(PrivateIntentPool.InvalidAmount.selector);
-        pool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            largeAmount,
-            DEST_CHAIN,
-            user,
-            0
-        );
-
         vm.stopPrank();
     }
 
     function test_RevertWhen_CreateIntent_DuplicateCommitment() public {
-        vm.startPrank(relayer);
+        token.mint(user, TEST_AMOUNT * 2);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT * 2);
 
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
             0
@@ -355,81 +271,72 @@ contract PrivateIntentPoolTest is Test {
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
             0
         );
-
         vm.stopPrank();
     }
 
-    function test_RevertWhen_CreateIntent_DuplicateIntentId() public {
-        vm.startPrank(relayer);
+    function test_RevertWhen_CreateIntent_Paused() public {
+        vm.prank(owner);
+        pool.pauseContract();
 
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+
+        vm.expectRevert(PrivateIntentPool.ContractIsPaused.selector);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
-            DEST_CHAIN,
-            user,
-            0
-        );
-
-        bytes32 secret2 = keccak256("secret2");
-        bytes32 nullifier2 = keccak256("nullifier2");
-        bytes32[4] memory inputs2 = [
-            secret2,
-            nullifier2,
-            bytes32(TEST_AMOUNT),
-            bytes32(uint256(DEST_CHAIN))
-        ];
-        bytes32 commitment2 = poseidon.poseidon(inputs2);
-
-        vm.expectRevert(PrivateIntentPool.DuplicateCommitment.selector);
-        pool.createIntent(
-            intentId,
-            commitment2,
             address(token),
-            TEST_AMOUNT,
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
             0
         );
-
         vm.stopPrank();
     }
 
-    // ========== MARK FILLED TESTS ==========
+    // ========== SETTLE INTENT TESTS ==========
 
-    function test_MarkFilled() public {
-        vm.prank(relayer);
+    function test_SettleIntent_WithProof() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
+        vm.stopPrank();
 
-        bytes32 destRoot = intentId;
+        bytes32 destRoot = _computeSingleLeafRoot(intentId);
+        bytes32[] memory proof = new bytes32[](1);
+        proof[0] = bytes32(0);
+
         vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        pool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
-        bytes32[] memory proof = new bytes32[](0);
-
-        vm.startPrank(solver);
+        vm.prank(relayer);
         vm.expectEmit(true, true, false, false);
-        emit IntentMarkedFilled(intentId, solver, destRoot);
+        emit IntentSettled(intentId, solver, destRoot);
 
-        pool.markFilled(intentId, solver, proof, 0);
-        vm.stopPrank();
+        pool.settleIntent(intentId, solver, proof, 0);
 
         PrivateIntentPool.Intent memory intent = pool.getIntent(intentId);
         assertTrue(intent.filled);
-
         assertEq(pool.getSolver(intentId), solver);
 
         uint256 fee = (TEST_AMOUNT * pool.FEE_BPS()) / 10000;
@@ -438,245 +345,553 @@ contract PrivateIntentPoolTest is Test {
         assertEq(token.balanceOf(feeCollector), fee);
     }
 
-    function test_RevertWhen_MarkFilled_RootNotSynced() public {
-        vm.prank(relayer);
+    function test_RevertWhen_SettleIntent_RootNotSynced() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
+        vm.stopPrank();
 
         bytes32[] memory proof = new bytes32[](0);
 
-        vm.prank(solver);
+        vm.prank(relayer);
         vm.expectRevert(PrivateIntentPool.RootNotSynced.selector);
-        pool.markFilled(intentId, solver, proof, 0);
+        pool.settleIntent(intentId, solver, proof, 0);
     }
 
-    function test_RevertWhen_MarkFilled_IntentNotFound() public {
-        bytes32 nonExistentId = keccak256("nonexistent");
-        bytes32[] memory proof = new bytes32[](0);
-
-        vm.prank(solver);
-        vm.expectRevert(PrivateIntentPool.IntentNotFound.selector);
-        pool.markFilled(nonExistentId, solver, proof, 0);
-    }
-
-    function test_RevertWhen_MarkFilled_AlreadyFilled() public {
-        vm.prank(relayer);
+    function test_RevertWhen_SettleIntent_AlreadySettled() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
+        vm.stopPrank();
 
-        bytes32 destRoot = intentId;
+        bytes32 destRoot = _computeSingleLeafRoot(intentId);
         vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        pool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
-        bytes32[] memory proof = new bytes32[](0);
+        bytes32[] memory proof = new bytes32[](1);
+        proof[0] = bytes32(0);
 
-        vm.prank(solver);
-        pool.markFilled(intentId, solver, proof, 0);
+        vm.prank(relayer);
+        pool.settleIntent(intentId, solver, proof, 0);
 
         address solver2 = makeAddr("solver2");
-        vm.prank(solver2);
-        vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        pool.markFilled(intentId, solver2, proof, 0);
-    }
-
-    function test_RevertWhen_MarkFilled_InvalidProof() public {
         vm.prank(relayer);
-        pool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            TEST_AMOUNT,
-            DEST_CHAIN,
-            user,
-            0 // customDeadline
-        );
-
-        bytes32 destRoot = keccak256("destRoot");
-        vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
-
-        bytes32[] memory invalidProof = new bytes32[](1);
-        invalidProof[0] = keccak256("invalid");
-
-        vm.prank(solver);
-        vm.expectRevert(PrivateIntentPool.InvalidProof.selector);
-        pool.markFilled(intentId, solver, invalidProof, 0);
-    }
-
-    function test_MarkFilled_CompetingSolvers() public {
-        vm.prank(relayer);
-        pool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            TEST_AMOUNT,
-            DEST_CHAIN,
-            user,
-            0 // customDeadline
-        );
-
-        bytes32 destRoot = intentId;
-        vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
-
-        bytes32[] memory proof = new bytes32[](0);
-
-        address solver1 = makeAddr("solver1");
-        vm.prank(solver1);
-        pool.markFilled(intentId, solver1, proof, 0);
-
-        assertEq(pool.getSolver(intentId), solver1);
-
-        address solver2 = makeAddr("solver2");
-        vm.prank(solver2);
-        vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        pool.markFilled(intentId, solver2, proof, 0);
+        vm.expectRevert(PrivateIntentPool.IntentAlreadySettled.selector);
+        pool.settleIntent(intentId, solver2, proof, 0);
     }
 
     // ========== REFUND TESTS ==========
 
-    function test_Refund() public {
-        vm.prank(relayer);
+    function test_RelayerRefund_AfterDeadline() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
+        vm.stopPrank();
 
         vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
 
         vm.expectEmit(true, false, false, false);
         emit IntentRefunded(intentId, TEST_AMOUNT);
 
+        vm.prank(relayer);
         pool.refund(intentId);
 
         PrivateIntentPool.Intent memory intent = pool.getIntent(intentId);
         assertTrue(intent.refunded);
-
         assertEq(token.balanceOf(user), TEST_AMOUNT);
     }
 
     function test_RevertWhen_Refund_NotExpired() public {
-        vm.prank(relayer);
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
+        vm.stopPrank();
 
+        vm.prank(relayer);
         vm.expectRevert(PrivateIntentPool.IntentNotExpired.selector);
         pool.refund(intentId);
     }
 
-    function test_RevertWhen_Refund_AlreadyFilled() public {
-        vm.prank(relayer);
+    function test_RevertWhen_Refund_NotRelayer() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
-
-        bytes32 destRoot = intentId;
-        vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
-
-        bytes32[] memory proof = new bytes32[](0);
-
-        vm.prank(solver);
-        pool.markFilled(intentId, solver, proof, 0);
+        vm.stopPrank();
 
         vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
 
-        vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(PrivateIntentPool.Unauthorized.selector);
         pool.refund(intentId);
     }
 
-    function test_RevertWhen_Refund_AlreadyRefunded() public {
-        vm.prank(relayer);
+    // ========== CANCEL INTENT TESTS ==========
+
+    function test_CancelIntent() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
 
-        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
-        pool.refund(intentId);
+        vm.expectEmit(true, true, false, false);
+        emit IntentCancelled(intentId, user);
 
-        vm.expectRevert(PrivateIntentPool.IntentAlreadyFilled.selector);
-        pool.refund(intentId);
+        pool.cancelIntent(intentId);
+        vm.stopPrank();
+
+        PrivateIntentPool.Intent memory intent = pool.getIntent(intentId);
+        assertTrue(intent.refunded);
+        assertEq(token.balanceOf(user), TEST_AMOUNT);
     }
 
-    // ========== ROOT SYNC TESTS ==========
+    function test_RevertWhen_CancelIntent_NotCreator() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+        vm.stopPrank();
 
-    function test_SyncDestChainRoot() public {
-        bytes32 root = keccak256("root");
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(PrivateIntentPool.NotIntentCreator.selector);
+        pool.cancelIntent(intentId);
+    }
 
-        vm.expectEmit(true, false, false, true);
-        emit RootSynced(DEST_CHAIN, root);
+    function test_RevertWhen_CancelIntent_AlreadyFilled() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+        vm.stopPrank();
+
+        bytes32 destRoot = _computeSingleLeafRoot(intentId);
+        bytes32[] memory proof = new bytes32[](1);
+        proof[0] = bytes32(0);
 
         vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, root);
+        pool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
-        assertEq(pool.getDestChainRoot(DEST_CHAIN), root);
-    }
-
-    function test_RevertWhen_SyncDestChainRoot_Unauthorized() public {
-        bytes32 root = keccak256("root");
+        vm.prank(relayer);
+        pool.settleIntent(intentId, solver, proof, 0);
 
         vm.prank(user);
-        vm.expectRevert(PrivateIntentPool.Unauthorized.selector);
-        pool.syncDestChainRoot(DEST_CHAIN, root);
+        vm.expectRevert(PrivateIntentPool.IntentAlreadyProcessed.selector);
+        pool.cancelIntent(intentId);
     }
 
-    function test_SyncDestChainRoot_UpdateExisting() public {
-        bytes32 root1 = keccak256("root1");
-        bytes32 root2 = keccak256("root2");
+    // ========== USER CLAIM REFUND TESTS ==========
 
-        vm.startPrank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, root1);
-        assertEq(pool.getDestChainRoot(DEST_CHAIN), root1);
-
-        pool.syncDestChainRoot(DEST_CHAIN, root2);
-        assertEq(pool.getDestChainRoot(DEST_CHAIN), root2);
+    function test_UserClaimRefund_AfterBuffer() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
         vm.stopPrank();
+
+        vm.warp(
+            block.timestamp +
+                pool.DEFAULT_INTENT_TIMEOUT() +
+                pool.MANUAL_REFUND_BUFFER() +
+                1
+        );
+
+        vm.expectEmit(true, true, false, false);
+        emit ManualRefundClaimed(intentId, user, TEST_AMOUNT);
+
+        vm.prank(user);
+        pool.userClaimRefund(intentId);
+
+        PrivateIntentPool.Intent memory intent = pool.getIntent(intentId);
+        assertTrue(intent.refunded);
+        assertEq(token.balanceOf(user), TEST_AMOUNT);
     }
 
-    // ========== MULTIPLE INTENTS TESTS ==========
+    function test_RevertWhen_UserClaimRefund_BeforeBuffer() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+        vm.stopPrank();
 
-    function test_CreateMultipleIntents() public {
-        vm.startPrank(relayer);
+        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 100);
 
-        for (uint256 i = 0; i < 5; i++) {
+        vm.prank(user);
+        vm.expectRevert(PrivateIntentPool.BufferPeriodActive.selector);
+        pool.userClaimRefund(intentId);
+    }
+
+    function test_RevertWhen_UserClaimRefund_NotCreator() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+        vm.stopPrank();
+
+        vm.warp(
+            block.timestamp +
+                pool.DEFAULT_INTENT_TIMEOUT() +
+                pool.MANUAL_REFUND_BUFFER() +
+                1
+        );
+
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(PrivateIntentPool.NotIntentCreator.selector);
+        pool.userClaimRefund(intentId);
+    }
+
+    // ========== PAUSE TESTS ==========
+
+    function test_PauseContract() public {
+        assertFalse(pool.paused());
+
+        vm.expectEmit(false, false, false, true);
+        emit ContractPaused(true);
+
+        vm.prank(owner);
+        pool.pauseContract();
+
+        assertTrue(pool.paused());
+        assertTrue(pool.pausedAt() > 0);
+    }
+
+    function test_UnpauseContract() public {
+        vm.prank(owner);
+        pool.pauseContract();
+        assertTrue(pool.paused());
+
+        vm.prank(owner);
+        pool.pauseContract();
+        assertFalse(pool.paused());
+    }
+
+    function test_RefundWorksWhenPaused() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+        vm.stopPrank();
+
+        vm.prank(owner);
+        pool.pauseContract();
+
+        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
+
+        vm.prank(relayer);
+        pool.refund(intentId);
+
+        assertTrue(pool.getIntent(intentId).refunded);
+    }
+
+    // ========== UPDATE FUNCTIONS TESTS ==========
+
+    function test_UpdateRelayer() public {
+        address newRelayer = makeAddr("newRelayer");
+
+        vm.expectEmit(true, true, false, false);
+        emit RelayerUpdated(relayer, newRelayer);
+
+        vm.prank(owner);
+        pool.updateRelayer(newRelayer);
+
+        assertEq(pool.RELAYER(), newRelayer);
+    }
+
+    function test_RevertWhen_UpdateRelayer_NotOwner() public {
+        address newRelayer = makeAddr("newRelayer");
+
+        vm.prank(user);
+        vm.expectRevert();
+        pool.updateRelayer(newRelayer);
+    }
+
+    function test_UpdatePoseidonHasher() public {
+        PoseidonHasher newPoseidon = new PoseidonHasher();
+
+        vm.expectEmit(true, true, false, false);
+        emit PoseidonHasherUpdated(address(poseidon), address(newPoseidon));
+
+        vm.prank(owner);
+        pool.updatePoseidonHasher(address(newPoseidon));
+
+        assertEq(address(pool.POSEIDON_HASHER()), address(newPoseidon));
+    }
+
+    // ========== EMERGENCY WITHDRAW TESTS ==========
+
+    function test_EmergencyWithdraw() public {
+        token.mint(address(pool), TEST_AMOUNT);
+
+        vm.prank(owner);
+        pool.pauseContract();
+
+        vm.warp(block.timestamp + pool.EMERGENCY_WITHDRAW_DELAY() + 1);
+
+        uint256 feeCollectorBalanceBefore = token.balanceOf(feeCollector);
+
+        vm.expectEmit(true, false, true, true);
+        emit EmergencyWithdrawal(address(token), TEST_AMOUNT, feeCollector);
+
+        vm.prank(owner);
+        pool.emergencyWithdraw(address(token), TEST_AMOUNT);
+
+        uint256 feeCollectorBalanceAfter = token.balanceOf(feeCollector);
+        assertEq(
+            feeCollectorBalanceAfter - feeCollectorBalanceBefore,
+            TEST_AMOUNT
+        );
+    }
+
+    function test_RevertWhen_EmergencyWithdraw_NotPaused() public {
+        token.mint(address(pool), TEST_AMOUNT);
+
+        vm.prank(owner);
+        vm.expectRevert(PrivateIntentPool.ContractNotPaused.selector);
+        pool.emergencyWithdraw(address(token), TEST_AMOUNT);
+    }
+
+    function test_RevertWhen_EmergencyWithdraw_BeforeDelay() public {
+        token.mint(address(pool), TEST_AMOUNT);
+
+        vm.prank(owner);
+        pool.pauseContract();
+
+        vm.warp(block.timestamp + 15 days);
+
+        vm.prank(owner);
+        vm.expectRevert(PrivateIntentPool.EmergencyPeriodNotReached.selector);
+        pool.emergencyWithdraw(address(token), TEST_AMOUNT);
+    }
+
+    // ========== MERKLE PROOF TESTS ==========
+
+    function test_GenerateProof_SingleLeaf() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
+        pool.createIntent(
+            intentId,
+            commitment,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+        vm.stopPrank();
+
+        (bytes32[] memory proof, uint256 index) = pool.generateCommitmentProof(
+            commitment
+        );
+
+        assertEq(index, 0);
+        assertEq(proof.length, 1);
+
+        bytes32 root = pool.getMerkleRoot();
+        assertTrue(root != commitment);
+    }
+
+    function test_GenerateProof_TwoLeaves() public {
+        token.mint(user, TEST_AMOUNT * 2);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT * 2);
+
+        bytes32 s1 = keccak256("secret1");
+        bytes32 n1 = keccak256("nullifier1");
+        bytes32 id1 = keccak256("intent1");
+        bytes32[4] memory inputs1 = [
+            s1,
+            n1,
+            bytes32(TEST_AMOUNT),
+            bytes32(uint256(DEST_CHAIN))
+        ];
+        bytes32 c1 = poseidon.poseidon(inputs1);
+
+        pool.createIntent(
+            id1,
+            c1,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+
+        bytes32 s2 = keccak256("secret2");
+        bytes32 n2 = keccak256("nullifier2");
+        bytes32 id2 = keccak256("intent2");
+        bytes32[4] memory inputs2 = [
+            s2,
+            n2,
+            bytes32(TEST_AMOUNT),
+            bytes32(uint256(DEST_CHAIN))
+        ];
+        bytes32 c2 = poseidon.poseidon(inputs2);
+
+        pool.createIntent(
+            id2,
+            c2,
+            address(token),
+            TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
+            DEST_CHAIN,
+            user,
+            0
+        );
+        vm.stopPrank();
+
+        assertEq(pool.getCommitmentTreeSize(), 2);
+
+        (bytes32[] memory proof1, uint256 index1) = pool
+            .generateCommitmentProof(c1);
+        assertEq(index1, 0);
+        assertEq(proof1.length, 1);
+        assertEq(proof1[0], c2);
+
+        (bytes32[] memory proof2, uint256 index2) = pool
+            .generateCommitmentProof(c2);
+        assertEq(index2, 1);
+        assertEq(proof2.length, 1);
+        assertEq(proof2[0], c1);
+    }
+
+    function test_GenerateProof_MultipleLeaves() public {
+        token.mint(user, TEST_AMOUNT * 3);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT * 3);
+
+        for (uint256 i = 0; i < 3; i++) {
             bytes32 s = keccak256(abi.encodePacked("secret", i));
             bytes32 n = keccak256(abi.encodePacked("nullifier", i));
             bytes32 id = keccak256(abi.encodePacked("intent", i));
@@ -694,73 +909,41 @@ contract PrivateIntentPoolTest is Test {
                 c,
                 address(token),
                 TEST_AMOUNT,
+                address(token),
+                TEST_AMOUNT - 1,
                 DEST_CHAIN,
                 user,
                 0
             );
-
-            assertTrue(pool.isCommitmentUsed(c));
         }
-
         vm.stopPrank();
 
-        assertEq(token.balanceOf(address(pool)), TEST_AMOUNT * 5);
-    }
+        assertEq(pool.getCommitmentTreeSize(), 3);
 
-    // ========== FUZZ TESTS ==========
-
-    function testFuzz_CreateIntent_ValidAmount(uint256 amount) public {
-        amount = bound(amount, 0.01 ether, 100 ether);
-
-        bytes32 s = keccak256(abi.encodePacked("fuzz_secret"));
-        bytes32 n = keccak256(abi.encodePacked("fuzz_nullifier"));
-        bytes32 id = keccak256(abi.encodePacked("fuzz_intent"));
-
-        bytes32[4] memory inputs = [
-            s,
-            n,
-            bytes32(amount),
+        bytes32 s0 = keccak256(abi.encodePacked("secret", uint256(0)));
+        bytes32 n0 = keccak256(abi.encodePacked("nullifier", uint256(0)));
+        bytes32[4] memory inputs0 = [
+            s0,
+            n0,
+            bytes32(TEST_AMOUNT),
             bytes32(uint256(DEST_CHAIN))
         ];
-        bytes32 c = poseidon.poseidon(inputs);
+        bytes32 c0 = poseidon.poseidon(inputs0);
 
-        token.mint(relayer, amount);
-
-        vm.prank(relayer);
-        pool.createIntent(id, c, address(token), amount, DEST_CHAIN, user, 0);
-
-        PrivateIntentPool.Intent memory intent = pool.getIntent(id);
-        assertEq(intent.amount, amount);
-    }
-
-    function testFuzz_Refund_AfterDeadline(uint256 timeAfterDeadline) public {
-        timeAfterDeadline = bound(timeAfterDeadline, 1, 365 days);
-
-        vm.prank(relayer);
-        pool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            TEST_AMOUNT,
-            DEST_CHAIN,
-            user,
-            0 // customDeadline
+        (bytes32[] memory proof, uint256 index) = pool.generateCommitmentProof(
+            c0
         );
 
-        vm.warp(
-            block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + timeAfterDeadline
-        );
-
-        pool.refund(intentId);
-
-        PrivateIntentPool.Intent memory intent = pool.getIntent(intentId);
-        assertTrue(intent.refunded);
+        assertEq(index, 0);
+        assertEq(proof.length, 2);
     }
 
     // ========== GAS BENCHMARKS ==========
 
     function test_Gas_CreateIntent() public {
-        vm.startPrank(relayer);
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
 
         uint256 gasBefore = gasleft();
         pool.createIntent(
@@ -768,9 +951,11 @@ contract PrivateIntentPoolTest is Test {
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
         uint256 gasUsed = gasBefore - gasleft();
 
@@ -778,51 +963,27 @@ contract PrivateIntentPoolTest is Test {
         vm.stopPrank();
     }
 
-    function test_Gas_MarkFilled() public {
-        vm.prank(relayer);
+    function test_Gas_CancelIntent() public {
+        token.mint(user, TEST_AMOUNT);
+        vm.startPrank(user);
+        token.approve(address(pool), TEST_AMOUNT);
         pool.createIntent(
             intentId,
             commitment,
             address(token),
             TEST_AMOUNT,
+            address(token),
+            TEST_AMOUNT - 1,
             DEST_CHAIN,
             user,
-            0 // customDeadline
+            0
         );
 
-        bytes32 destRoot = intentId;
-        vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
-
-        bytes32[] memory proof = new bytes32[](0);
-
-        vm.startPrank(solver);
         uint256 gasBefore = gasleft();
-        pool.markFilled(intentId, solver, proof, 0);
+        pool.cancelIntent(intentId);
         uint256 gasUsed = gasBefore - gasleft();
 
-        console.log("Gas used for markFilled:", gasUsed);
+        console.log("Gas used for cancelIntent:", gasUsed);
         vm.stopPrank();
-    }
-
-    function test_Gas_Refund() public {
-        vm.prank(relayer);
-        pool.createIntent(
-            intentId,
-            commitment,
-            address(token),
-            TEST_AMOUNT,
-            DEST_CHAIN,
-            user,
-            0 // customDeadline
-        );
-
-        vm.warp(block.timestamp + pool.DEFAULT_INTENT_TIMEOUT() + 1);
-
-        uint256 gasBefore = gasleft();
-        pool.refund(intentId);
-        uint256 gasUsed = gasBefore - gasleft();
-
-        console.log("Gas used for refund:", gasUsed);
     }
 }

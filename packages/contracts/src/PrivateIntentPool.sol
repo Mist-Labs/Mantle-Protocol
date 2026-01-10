@@ -5,20 +5,19 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {
     ReentrancyGuard
 } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {
+    MerkleProof
+} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {IPoseidonHasher} from "./interface.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-/**
- * @title PrivateIntentPool
- * @notice Creates privacy-preserving cross-chain intents using commitments
- * @dev Multi-token support, proper validation, matches PrivateSettlement
- * @custom:security-contact ebounce500@gmail.com
- */
 contract PrivateIntentPool is ReentrancyGuard, Ownable {
     struct Intent {
         bytes32 commitment;
-        address token;
-        uint256 amount;
+        address sourceToken;
+        uint256 sourceAmount;
+        address destToken;
+        uint256 destAmount;
         uint32 destChain;
         uint64 deadline;
         address refundTo;
@@ -35,7 +34,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
 
     mapping(bytes32 => Intent) public intents;
     mapping(bytes32 => bool) public commitments;
-    mapping(uint32 => bytes32) public destChainRoots;
+    mapping(uint32 => bytes32) public destChainFillRoots;
     mapping(bytes32 => address) public intentSolvers;
     mapping(address => TokenConfig) public tokenConfigs;
 
@@ -45,12 +44,17 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     bytes32[] public commitmentTree;
     mapping(bytes32 => uint256) public commitmentIndex;
 
-    IPoseidonHasher public immutable POSEIDON_HASHER;
-    address public immutable RELAYER;
-    address public immutable FEE_COLLECTOR;
+    IPoseidonHasher public POSEIDON_HASHER;
+    address public RELAYER;
+    address public FEE_COLLECTOR;
 
-    uint256 public constant DEFAULT_INTENT_TIMEOUT = 6 hours;
-    uint256 public constant FEE_BPS = 20; // 0.2%
+    bool public paused;
+    uint256 public pausedAt;
+    uint256 public commitmentsCount;
+    uint256 public constant DEFAULT_INTENT_TIMEOUT = 2 hours;
+    uint256 public constant MANUAL_REFUND_BUFFER = 300;
+    uint256 public constant EMERGENCY_WITHDRAW_DELAY = 30 days;
+    uint256 public constant FEE_BPS = 20;
     address public constant NATIVE_ETH =
         address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
 
@@ -58,12 +62,25 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         bytes32 indexed intentId,
         bytes32 indexed commitment,
         uint32 destChain,
-        address token,
+        address sourceToken,
+        uint256 sourceAmount,
+        address destToken,
+        uint256 destAmount
+    );
+    event IntentSettled(
+        bytes32 indexed intentId,
+        address indexed solver,
+        bytes32 fillRoot
+    );
+    event IntentRefunded(bytes32 indexed intentId, uint256 amount);
+    event IntentCancelled(bytes32 indexed intentId, address indexed creator);
+    event ManualRefundClaimed(
+        bytes32 indexed intentId,
+        address indexed creator,
         uint256 amount
     );
-    event IntentMarkedFilled(bytes32 indexed intentId, address indexed solver, bytes32 fillRoot);
-    event IntentRefunded(bytes32 indexed intentId, uint256 amount);
     event RootSynced(uint32 indexed chainId, bytes32 root);
+    event FillRootSynced(uint32 indexed chainId, bytes32 root);
     event MerkleRootUpdated(bytes32 root);
     event TokenAdded(
         address indexed token,
@@ -76,12 +93,26 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         uint256 minAmount,
         uint256 maxAmount
     );
+    event ContractPaused(bool paused);
+    event RelayerUpdated(
+        address indexed oldRelayer,
+        address indexed newRelayer
+    );
+    event PoseidonHasherUpdated(
+        address indexed oldHasher,
+        address indexed newHasher
+    );
+    event EmergencyWithdrawal(
+        address indexed token,
+        uint256 amount,
+        address indexed recipient
+    );
 
     error InvalidAmount();
     error InvalidToken();
     error DuplicateCommitment();
     error IntentNotFound();
-    error IntentAlreadyFilled();
+    error IntentAlreadySettled();
     error IntentNotExpired();
     error Unauthorized();
     error TransferFailed();
@@ -94,9 +125,20 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     error InvalidDeadline();
     error InvalidAddress();
     error DirectETHDepositNotAllowed();
+    error ContractIsPaused();
+    error ContractNotPaused();
+    error NotIntentCreator();
+    error IntentAlreadyProcessed();
+    error BufferPeriodActive();
+    error EmergencyPeriodNotReached();
 
     modifier onlyRelayer() {
         if (msg.sender != RELAYER) revert Unauthorized();
+        _;
+    }
+
+    modifier whenNotPaused() {
+        if (paused) revert ContractIsPaused();
         _;
     }
 
@@ -111,42 +153,29 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         POSEIDON_HASHER = IPoseidonHasher(_poseidonHasher);
     }
 
-    /**
-     * @notice Create private intent with commitment verification
-     * @dev Supports both native ETH and ERC20 tokens
-     * @param intentId Unique identifier for the intent
-     * @param commitment Privacy commitment (hash of secret + nullifier + amount + chain)
-     * @param token Token address (use NATIVE_ETH for native transfers)
-     * @param amount Amount in token's smallest unit
-     * @param destChain Destination chain ID
-     * @param refundTo Address to receive refund if intent expires
-     * @param customDeadline Optional custom deadline (0 = use default timeout)
-     */
     function createIntent(
         bytes32 intentId,
         bytes32 commitment,
-        address token,
-        uint256 amount,
+        address sourceToken,
+        uint256 sourceAmount,
+        address destToken,
+        uint256 destAmount,
         uint32 destChain,
         address refundTo,
         uint64 customDeadline
-    ) external payable nonReentrant {
-        // Validate token configuration
-        TokenConfig storage config = tokenConfigs[token];
+    ) external payable nonReentrant whenNotPaused {
+        TokenConfig storage config = tokenConfigs[sourceToken];
         if (!config.supported) revert TokenNotSupported();
-        if (amount < config.minFillAmount || amount > config.maxFillAmount) {
-            revert InvalidAmount();
-        }
-
-        // Validate commitment and intent ID
+        if (
+            sourceAmount < config.minFillAmount ||
+            sourceAmount > config.maxFillAmount
+        ) revert InvalidAmount();
+        if (destAmount == 0) revert InvalidAmount();
         if (commitments[commitment]) revert DuplicateCommitment();
-        if (intents[intentId].commitment != bytes32(0)) {
+        if (intents[intentId].commitment != bytes32(0))
             revert DuplicateCommitment();
-        }
+        if (refundTo == address(0)) revert InvalidAddress();
 
-        if (refundTo == address(0)) revert InvalidToken();
-
-        //  Calculate deadline
         uint64 deadline;
         if (customDeadline == 0) {
             deadline = uint64(block.timestamp + DEFAULT_INTENT_TIMEOUT);
@@ -155,14 +184,14 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             deadline = customDeadline;
         }
 
-        // Mark commitment as used
         commitments[commitment] = true;
 
-        // Store intent
         intents[intentId] = Intent({
             commitment: commitment,
-            token: token,
-            amount: amount,
+            sourceToken: sourceToken,
+            sourceAmount: sourceAmount,
+            destToken: destToken,
+            destAmount: destAmount,
             destChain: destChain,
             deadline: deadline,
             refundTo: refundTo,
@@ -170,155 +199,214 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             refunded: false
         });
 
-        // Add to merkle tree
         commitmentTree.push(commitment);
         commitmentIndex[commitment] = commitmentTree.length - 1;
 
-        // Handle token transfer
-        if (token == NATIVE_ETH) {
-            if (msg.value != amount) revert InvalidAmount();
+        commitmentsCount = commitmentsCount + 1;
+
+        if (sourceToken == NATIVE_ETH) {
+            if (msg.value != sourceAmount) revert InvalidAmount();
         } else {
             if (msg.value != 0) revert InvalidAmount();
             if (
-                !IERC20(token).transferFrom(msg.sender, address(this), amount)
-            ) {
-                revert TransferFailed();
-            }
+                !IERC20(sourceToken).transferFrom(
+                    msg.sender,
+                    address(this),
+                    sourceAmount
+                )
+            ) revert TransferFailed();
         }
 
-        emit IntentCreated(intentId, commitment, destChain, token, amount);
+        emit IntentCreated(
+            intentId,
+            commitment,
+            destChain,
+            sourceToken,
+            sourceAmount,
+            destToken,
+            destAmount
+        );
         emit MerkleRootUpdated(_computeMerkleRoot());
     }
 
-    /**
-     * @notice Mark intent as filled after cross-chain verification
-     * @dev Called by relayer after filling on destination chain - proves fill happened
-     * @param intentId The unique identifier of the intent
-     * @param merkleProof Merkle proof showing intentId exists in destination fillTree
-     * @param leafIndex Position of the intentId in destination merkle tree
-     */
-    function markFilled(
+    function settleIntent(
         bytes32 intentId,
         address solver,
         bytes32[] calldata merkleProof,
         uint256 leafIndex
-    ) external nonReentrant {
+    ) external nonReentrant onlyRelayer whenNotPaused {
         Intent storage intent = intents[intentId];
-
-        // Validate intent state
         if (intent.commitment == bytes32(0)) revert IntentNotFound();
-        if (intent.filled || intent.refunded) revert IntentAlreadyFilled();
+        if (intent.filled || intent.refunded) revert IntentAlreadySettled();
         if (solver == address(0)) revert InvalidAddress();
 
-        // Get synced root from destination chain
-        bytes32 destRoot = destChainRoots[intent.destChain];
+        bytes32 destRoot = destChainFillRoots[intent.destChain];
         if (destRoot == bytes32(0)) revert RootNotSynced();
 
-        // Verify intentId (not commitment) exists in dest chain fillTree
-        if (!_verifyMerkleProof(intentId, destRoot, merkleProof, leafIndex)) {
+        if (!MerkleProof.verify(merkleProof, destRoot, intentId)) {
             revert InvalidProof();
         }
 
-        // Check balance before state changes
-        if (intent.token == NATIVE_ETH) {
-            if (address(this).balance < intent.amount)
+        if (intent.sourceToken == NATIVE_ETH) {
+            if (address(this).balance < intent.sourceAmount)
                 revert InsufficientBalance();
         } else {
-            if (IERC20(intent.token).balanceOf(address(this)) < intent.amount) {
-                revert InsufficientBalance();
-            }
+            if (
+                IERC20(intent.sourceToken).balanceOf(address(this)) <
+                intent.sourceAmount
+            ) revert InsufficientBalance();
         }
 
-        // Mark as filled (CEI pattern)
         intent.filled = true;
         intentSolvers[intentId] = solver;
 
-        // Calculate distribution
-        uint256 fee = (intent.amount * FEE_BPS) / 10000;
-        uint256 solverAmount = intent.amount - fee;
+        uint256 fee = (intent.sourceAmount * FEE_BPS) / 10000;
+        uint256 solverReimbursement = intent.sourceAmount - fee;
 
-        // Transfer to solver and fee collector
-        if (intent.token == NATIVE_ETH) {
-            (bool success1, ) = solver.call{value: solverAmount}("");
+        if (intent.sourceToken == NATIVE_ETH) {
+            (bool success1, ) = solver.call{value: solverReimbursement}("");
             if (!success1) revert TransferFailed();
-
             (bool success2, ) = FEE_COLLECTOR.call{value: fee}("");
             if (!success2) revert TransferFailed();
         } else {
-            if (!IERC20(intent.token).transfer(solver, solverAmount)) {
+            if (
+                !IERC20(intent.sourceToken).transfer(
+                    solver,
+                    solverReimbursement
+                )
+            ) revert TransferFailed();
+            if (!IERC20(intent.sourceToken).transfer(FEE_COLLECTOR, fee))
                 revert TransferFailed();
-            }
-
-            if (!IERC20(intent.token).transfer(FEE_COLLECTOR, fee)) {
-                revert TransferFailed();
-            }
         }
 
-        emit IntentMarkedFilled(intentId, solver, _computeMerkleRoot()); 
+        emit IntentSettled(intentId, solver, destRoot);
     }
 
-    /**
-     * @notice Sync destination chain merkle root from settlement contract
-     * @dev Called by relayer to update proof verification root
-     * @param chainId Destination chain identifier
-     * @param root Merkle root from destination chain's PrivateSettlement.fillTree
-     */
-    function syncDestChainRoot(
+    function syncDestChainFillRoot(
         uint32 chainId,
         bytes32 root
     ) external onlyRelayer {
-        destChainRoots[chainId] = root;
-        emit RootSynced(chainId, root);
+        destChainFillRoots[chainId] = root;
+        emit FillRootSynced(chainId, root);
     }
 
-    /**
-     * @notice Refund expired intent to original depositor
-     * @dev Can be called by anyone after deadline passes
-     * @param intentId Intent identifier to refund
-     */
-    function refund(bytes32 intentId) external nonReentrant {
+    function refund(bytes32 intentId) external nonReentrant onlyRelayer {
         Intent storage intent = intents[intentId];
-
-        // Validate intent state
         if (intent.commitment == bytes32(0)) revert IntentNotFound();
-        if (intent.filled || intent.refunded) revert IntentAlreadyFilled();
+        if (intent.filled || intent.refunded) revert IntentAlreadySettled();
         if (block.timestamp < intent.deadline) revert IntentNotExpired();
 
-        // Check balance before refund
-        if (intent.token == NATIVE_ETH) {
-            if (address(this).balance < intent.amount)
+        if (intent.sourceToken == NATIVE_ETH) {
+            if (address(this).balance < intent.sourceAmount)
                 revert InsufficientBalance();
         } else {
-            if (IERC20(intent.token).balanceOf(address(this)) < intent.amount) {
-                revert InsufficientBalance();
-            }
+            if (
+                IERC20(intent.sourceToken).balanceOf(address(this)) <
+                intent.sourceAmount
+            ) revert InsufficientBalance();
         }
 
-        // Mark as refunded (CEI pattern)
         intent.refunded = true;
 
-        // Transfer back to refundTo address
-        if (intent.token == NATIVE_ETH) {
-            (bool success, ) = intent.refundTo.call{value: intent.amount}("");
+        if (intent.sourceToken == NATIVE_ETH) {
+            (bool success, ) = intent.refundTo.call{value: intent.sourceAmount}(
+                ""
+            );
             if (!success) revert TransferFailed();
         } else {
             if (
-                !IERC20(intent.token).transfer(intent.refundTo, intent.amount)
-            ) {
-                revert TransferFailed();
-            }
+                !IERC20(intent.sourceToken).transfer(
+                    intent.refundTo,
+                    intent.sourceAmount
+                )
+            ) revert TransferFailed();
         }
 
-        emit IntentRefunded(intentId, intent.amount);
+        emit IntentRefunded(intentId, intent.sourceAmount);
     }
 
-    /**
-     * @notice Add supported token with specific limits
-     * @param token Token address (use NATIVE_ETH for native transfers)
-     * @param minAmount Minimum intent amount in token's smallest unit
-     * @param maxAmount Maximum intent amount in token's smallest unit
-     * @param decimals Token decimals (18 for ETH/WETH, 6 for USDC/USDT)
-     */
+    function cancelIntent(
+        bytes32 intentId
+    ) external nonReentrant whenNotPaused {
+        Intent storage intent = intents[intentId];
+        if (intent.commitment == bytes32(0)) revert IntentNotFound();
+        if (intent.refundTo != msg.sender) revert NotIntentCreator();
+        if (intent.filled || intent.refunded) revert IntentAlreadyProcessed();
+
+        intent.refunded = true;
+
+        if (intent.sourceToken == NATIVE_ETH) {
+            if (address(this).balance < intent.sourceAmount)
+                revert InsufficientBalance();
+            (bool success, ) = msg.sender.call{value: intent.sourceAmount}("");
+            if (!success) revert TransferFailed();
+        } else {
+            if (
+                !IERC20(intent.sourceToken).transfer(
+                    msg.sender,
+                    intent.sourceAmount
+                )
+            ) revert TransferFailed();
+        }
+
+        emit IntentCancelled(intentId, msg.sender);
+    }
+
+    function userClaimRefund(bytes32 intentId) external nonReentrant {
+        Intent storage intent = intents[intentId];
+        if (intent.commitment == bytes32(0)) revert IntentNotFound();
+        if (intent.refundTo != msg.sender) revert NotIntentCreator();
+        if (intent.filled || intent.refunded) revert IntentAlreadyProcessed();
+        if (block.timestamp < intent.deadline + MANUAL_REFUND_BUFFER)
+            revert BufferPeriodActive();
+
+        intent.refunded = true;
+
+        if (intent.sourceToken == NATIVE_ETH) {
+            if (address(this).balance < intent.sourceAmount)
+                revert InsufficientBalance();
+            (bool success, ) = msg.sender.call{value: intent.sourceAmount}("");
+            if (!success) revert TransferFailed();
+        } else {
+            if (
+                !IERC20(intent.sourceToken).transfer(
+                    msg.sender,
+                    intent.sourceAmount
+                )
+            ) revert TransferFailed();
+        }
+
+        emit ManualRefundClaimed(intentId, msg.sender, intent.sourceAmount);
+    }
+
+    function pauseContract() external onlyOwner {
+        paused = !paused;
+        if (paused) pausedAt = block.timestamp;
+        emit ContractPaused(paused);
+    }
+
+    function emergencyWithdraw(
+        address token,
+        uint256 amount
+    ) external onlyOwner {
+        if (!paused) revert ContractNotPaused();
+        if (block.timestamp < pausedAt + EMERGENCY_WITHDRAW_DELAY)
+            revert EmergencyPeriodNotReached();
+
+        if (token == NATIVE_ETH) {
+            if (address(this).balance < amount) revert InsufficientBalance();
+            (bool success, ) = FEE_COLLECTOR.call{value: amount}("");
+            if (!success) revert TransferFailed();
+        } else {
+            if (IERC20(token).balanceOf(address(this)) < amount)
+                revert InsufficientBalance();
+            if (!IERC20(token).transfer(FEE_COLLECTOR, amount))
+                revert TransferFailed();
+        }
+
+        emit EmergencyWithdrawal(token, amount, FEE_COLLECTOR);
+    }
+
     function addSupportedToken(
         address token,
         uint256 minAmount,
@@ -327,9 +415,8 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     ) external onlyOwner {
         if (tokenConfigs[token].supported) revert AlreadySupported();
         if (token == address(0)) revert InvalidToken();
-        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount) {
+        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount)
             revert InvalidTokenConfig();
-        }
 
         tokenConfigs[token] = TokenConfig({
             supported: true,
@@ -337,25 +424,20 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
             maxFillAmount: maxAmount,
             decimals: decimals
         });
-
         tokenIndex[token] = tokenList.length;
         tokenList.push(token);
 
         emit TokenAdded(token, minAmount, maxAmount);
     }
 
-    /**
-     * @notice Update token configuration limits
-     */
     function updateTokenConfig(
         address token,
         uint256 minAmount,
         uint256 maxAmount
     ) external onlyOwner {
         if (!tokenConfigs[token].supported) revert TokenNotSupported();
-        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount) {
+        if (minAmount == 0 || maxAmount == 0 || minAmount > maxAmount)
             revert InvalidTokenConfig();
-        }
 
         tokenConfigs[token].minFillAmount = minAmount;
         tokenConfigs[token].maxFillAmount = maxAmount;
@@ -363,12 +445,8 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         emit TokenConfigUpdated(token, minAmount, maxAmount);
     }
 
-    /**
-     * @notice Remove token from supported list
-     */
     function removeSupportedToken(address token) external onlyOwner {
         if (!tokenConfigs[token].supported) revert TokenNotSupported();
-
         tokenConfigs[token].supported = false;
 
         uint256 index = tokenIndex[token];
@@ -386,10 +464,20 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         emit TokenRemoved(token);
     }
 
-    /**
-     * @notice CANONICAL hash pair - sorts inputs before hashing
-     * @dev MUST match PrivateSettlement's hashing for cross-chain compatibility
-     */
+    function updateRelayer(address newRelayer) external onlyOwner {
+        if (newRelayer == address(0)) revert InvalidAddress();
+        address oldRelayer = RELAYER;
+        RELAYER = newRelayer;
+        emit RelayerUpdated(oldRelayer, newRelayer);
+    }
+
+    function updatePoseidonHasher(address newHasher) external onlyOwner {
+        if (newHasher == address(0)) revert InvalidAddress();
+        address oldHasher = address(POSEIDON_HASHER);
+        POSEIDON_HASHER = IPoseidonHasher(newHasher);
+        emit PoseidonHasherUpdated(oldHasher, newHasher);
+    }
+
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
         return
             a < b
@@ -397,123 +485,91 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
                 : keccak256(abi.encodePacked(b, a));
     }
 
-    /**
-     * @notice Verify merkle proof using CANONICAL hashing
-     * @dev Verifies intentId exists in destination chain's fillTree
-     */
-    function _verifyMerkleProof(
-        bytes32 leaf,
-        bytes32 root,
-        bytes32[] calldata proof,
-        uint256 index
-    ) internal pure returns (bool) {
-        bytes32 computedHash = leaf;
-
-        for (uint256 i = 0; i < proof.length; i++) {
-            bytes32 proofElement = proof[i];
-            computedHash = _hashPair(computedHash, proofElement);
-            index = index / 2;
-        }
-
-        return computedHash == root;
-    }
-
-    /**
-     * @notice Compute merkle root of all commitments using CANONICAL hashing
-     * @dev Used for generating proofs that can be verified on destination chain
-     */
     function _computeMerkleRoot() internal view returns (bytes32) {
-        if (commitmentTree.length == 0) return bytes32(0);
-        if (commitmentTree.length == 1) return commitmentTree[0];
-
         uint256 n = commitmentTree.length;
+        if (n == 0) return bytes32(0);
 
-        bytes32[] memory layer = new bytes32[](n);
+        uint256 treeSize = _nextPowerOf2(n);
+        if (treeSize < 2) treeSize = 2;
+
+        bytes32[] memory layer = new bytes32[](treeSize);
+
         for (uint256 i = 0; i < n; i++) {
             layer[i] = commitmentTree[i];
         }
 
-        while (n > 1) {
-            for (uint256 i = 0; i < n / 2; i++) {
+        for (uint256 i = n; i < treeSize; i++) {
+            layer[i] = bytes32(0);
+        }
+
+        while (treeSize > 1) {
+            for (uint256 i = 0; i < treeSize / 2; i++) {
                 layer[i] = _hashPair(layer[2 * i], layer[2 * i + 1]);
             }
-
-            if (n % 2 == 1) {
-                layer[n / 2] = layer[n - 1];
-                n = n / 2 + 1;
-            } else {
-                n = n / 2;
-            }
+            treeSize = treeSize / 2;
         }
 
         return layer[0];
     }
 
-    /**
-     * @notice Generate merkle proof for a commitment
-     * @dev Called by RELAYER to prove commitment exists on source chain
-     * @dev This proof is used when calling PrivateSettlement.fillIntent() on destination
-     * @param commitment Commitment to generate proof for
-     * @return proof Array of sibling hashes
-     * @return index Position in tree
-     */
     function generateCommitmentProof(
         bytes32 commitment
     ) external view returns (bytes32[] memory proof, uint256 index) {
         index = commitmentIndex[commitment];
         if (index >= commitmentTree.length) revert IntentNotFound();
 
-        uint256 proofLength = 0;
         uint256 n = commitmentTree.length;
-        while (n > 1) {
-            proofLength++;
-            n = (n + 1) / 2;
+        uint256 treeSize = _nextPowerOf2(n);
+        if (treeSize < 2) treeSize = 2;
+
+        uint256 height = 0;
+        uint256 temp = treeSize;
+        while (temp > 1) {
+            height++;
+            temp = temp / 2;
         }
 
-        proof = new bytes32[](proofLength);
-        uint256 currentIndex = index;
+        proof = new bytes32[](height);
 
-        bytes32[] memory layer = new bytes32[](commitmentTree.length);
-        for (uint256 i = 0; i < commitmentTree.length; i++) {
+        bytes32[] memory layer = new bytes32[](treeSize);
+        for (uint256 i = 0; i < n; i++) {
             layer[i] = commitmentTree[i];
         }
+        for (uint256 i = n; i < treeSize; i++) {
+            layer[i] = bytes32(0);
+        }
 
-        n = commitmentTree.length;
-        uint256 proofIndex = 0;
+        uint256 currentIndex = index;
+        uint256 currentSize = treeSize;
 
-        while (n > 1) {
-            if (currentIndex % 2 == 0) {
-                if (currentIndex + 1 < n) {
-                    proof[proofIndex] = layer[currentIndex + 1];
-                } else {
-                    proof[proofIndex] = layer[currentIndex];
-                }
-            } else {
-                proof[proofIndex] = layer[currentIndex - 1];
-            }
+        for (uint256 level = 0; level < height; level++) {
+            uint256 siblingIndex = currentIndex ^ 1;
+            proof[level] = layer[siblingIndex];
 
-            proofIndex++;
-
-            for (uint256 i = 0; i < n / 2; i++) {
+            for (uint256 i = 0; i < currentSize / 2; i++) {
                 layer[i] = _hashPair(layer[2 * i], layer[2 * i + 1]);
             }
 
-            if (n % 2 == 1) {
-                layer[n / 2] = layer[n - 1];
-                n = n / 2 + 1;
-            } else {
-                n = n / 2;
-            }
-
             currentIndex = currentIndex / 2;
+            currentSize = currentSize / 2;
         }
 
         return (proof, index);
     }
 
-    // ============================================================================
-    // VIEW FUNCTIONS
-    // ============================================================================
+    function _nextPowerOf2(uint256 n) internal pure returns (uint256) {
+        if (n == 0) return 1;
+        n--;
+        n |= n >> 1;
+        n |= n >> 2;
+        n |= n >> 4;
+        n |= n >> 8;
+        n |= n >> 16;
+        n |= n >> 32;
+        n |= n >> 64;
+        n |= n >> 128;
+        return n + 1;
+    }
 
     function getIntent(bytes32 intentId) external view returns (Intent memory) {
         return intents[intentId];
@@ -530,7 +586,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     }
 
     function getDestChainRoot(uint32 chainId) external view returns (bytes32) {
-        return destChainRoots[chainId];
+        return destChainFillRoots[chainId];
     }
 
     function getSolver(bytes32 intentId) external view returns (address) {
@@ -557,10 +613,6 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         return tokenConfigs[token].supported;
     }
 
-    /**
-     * @notice Reject direct ETH deposits
-     * @dev ETH must be deposited via createIntent function
-     */
     receive() external payable {
         revert DirectETHDepositNotAllowed();
     }

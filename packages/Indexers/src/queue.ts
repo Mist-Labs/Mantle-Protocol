@@ -5,10 +5,12 @@ import {
   handleIntentCreated,
   handleIntentRegistered,
   handleIntentFilled,
-  handleIntentMarkedFilled,
+  handleIntentSettled,
   handleIntentRefunded,
   handleWithdrawalClaimed,
   handleRootSynced,
+  handleFillRootSynced,
+  handleCommitmentRootSynced,
 } from "./handler";
 import crypto from "crypto";
 import axios from "axios";
@@ -86,8 +88,8 @@ const worker = new Worker(
         case "intent_filled":
           transformedPayload = await handleIntentFilled(payload);
           break;
-        case "intent_marked_filled":
-          transformedPayload = await handleIntentMarkedFilled(payload);
+        case "intent_settled":
+          transformedPayload = await handleIntentSettled(payload);
           break;
         case "intent_refunded":
           transformedPayload = await handleIntentRefunded(payload);
@@ -97,6 +99,12 @@ const worker = new Worker(
           break;
         case "root_synced":
           transformedPayload = await handleRootSynced(payload);
+          break;
+        case "fill_root_synced":
+          transformedPayload = await handleFillRootSynced(payload);
+          break;
+        case "commitment_root_synced":
+          transformedPayload = await handleCommitmentRootSynced(payload);
           break;
         default:
           console.warn(`⚠️  Unknown entity type: ${entity}`);

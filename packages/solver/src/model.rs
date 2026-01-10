@@ -78,9 +78,9 @@ pub enum FillStatus {
     Confirmed,
     Claimed,
     Failed,
-    Expired,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ActiveFill {
     pub intent_id: H256,
