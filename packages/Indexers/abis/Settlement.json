@@ -19,6 +19,8 @@
   { "inputs": [], "name": "AlreadySupported", "type": "error" },
   { "inputs": [], "name": "AmountMismatch", "type": "error" },
   { "inputs": [], "name": "ChainMismatch", "type": "error" },
+  { "inputs": [], "name": "ContractIsPaused", "type": "error" },
+  { "inputs": [], "name": "ContractNotPaused", "type": "error" },
   { "inputs": [], "name": "DirectETHDepositNotAllowed", "type": "error" },
   { "inputs": [], "name": "ECDSAInvalidSignature", "type": "error" },
   {
@@ -33,9 +35,11 @@
     "name": "ECDSAInvalidSignatureS",
     "type": "error"
   },
+  { "inputs": [], "name": "EmergencyPeriodNotReached", "type": "error" },
   { "inputs": [], "name": "InsufficientBalance", "type": "error" },
   { "inputs": [], "name": "IntentExpired", "type": "error" },
   { "inputs": [], "name": "IntentNotRegistered", "type": "error" },
+  { "inputs": [], "name": "InvalidAddress", "type": "error" },
   { "inputs": [], "name": "InvalidAmount", "type": "error" },
   { "inputs": [], "name": "InvalidCommitment", "type": "error" },
   { "inputs": [], "name": "InvalidProof", "type": "error" },
@@ -80,6 +84,44 @@
       }
     ],
     "name": "CommitmentRootSynced",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "paused",
+        "type": "bool"
+      }
+    ],
+    "name": "ContractPaused",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "token",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "recipient",
+        "type": "address"
+      }
+    ],
+    "name": "EmergencyWithdrawal",
     "type": "event"
   },
   {
@@ -205,6 +247,44 @@
     "inputs": [
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "oldHasher",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "newHasher",
+        "type": "address"
+      }
+    ],
+    "name": "PoseidonHasherUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "oldRelayer",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "newRelayer",
+        "type": "address"
+      }
+    ],
+    "name": "RelayerUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "uint32",
         "name": "chainId",
         "type": "uint32"
@@ -309,6 +389,13 @@
   },
   {
     "inputs": [],
+    "name": "EMERGENCY_WITHDRAW_DELAY",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "FEE_BPS",
     "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
     "stateMutability": "view",
@@ -369,6 +456,16 @@
       { "internalType": "bytes", "name": "claimAuth", "type": "bytes" }
     ],
     "name": "claimWithdrawal",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "token", "type": "address" },
+      { "internalType": "uint256", "name": "amount", "type": "uint256" }
+    ],
+    "name": "emergencyWithdraw",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -608,6 +705,27 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "pauseContract",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "paused",
+    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "pausedAt",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       { "internalType": "bytes32", "name": "intentId", "type": "bytes32" },
       { "internalType": "bytes32", "name": "commitment", "type": "bytes32" },
@@ -674,6 +792,24 @@
       { "internalType": "address", "name": "newOwner", "type": "address" }
     ],
     "name": "transferOwnership",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "newHasher", "type": "address" }
+    ],
+    "name": "updatePoseidonHasher",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "newRelayer", "type": "address" }
+    ],
+    "name": "updateRelayer",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

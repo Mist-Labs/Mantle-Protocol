@@ -13,15 +13,15 @@
   "instances": [
     {
       "abi": "IntentPool",
-      "address": "0x465f55D9046f74BF6115d191295c338c83CB2D37",
+      "address": "0x6ebcF830b855108Fa44AbED6Ba964F2Af9C34424",
       "chain": "mantle-sepolia",
-      "startBlock": 33197983
+      "startBlock": 33247790
     },
     {
       "abi": "Settlement",
-      "address": "0xc42f17e3fc88416fC36e83A9e9F71b0b2EF5F538",
+      "address": "0x1c4F9eBeccE31cEFe2FDe415b05184b4ea46908f",
       "chain": "mantle-sepolia",
-      "startBlock": 33197983
+      "startBlock": 33247790
     }
   ]
 }

@@ -239,6 +239,15 @@ pub async fn handle_intent_created_event(
     let block_number = Some(request.block_number as i64);
     let log_index = Some(request.log_index as i32);
 
+    info!(
+        "🔍 DEBUG: block_number = {:?}, log_index = {:?}",
+        block_number, log_index
+    );
+    info!(
+        "🔍 DEBUG: request.block_number = {}, request.log_index = {}",
+        request.block_number, request.log_index
+    );
+
     let intent = Intent {
         id: intent_id.to_string(),
         user_address: refund_address.to_string(),

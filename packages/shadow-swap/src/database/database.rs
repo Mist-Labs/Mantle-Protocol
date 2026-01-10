@@ -11,17 +11,13 @@ use serde_json::Value;
 use tracing::{error, info, warn};
 
 use crate::database::model::{
-    BridgeStats, DbBridgeEvent, DbChainTransaction, DbEthereumIntentCreated, DbMantleIntentCreated,
-    DbMerkleNode, DbMerkleTree, NewBridgeEvent, NewChainTransaction, NewMerkleNode, NewMerkleTree,
-    NewRootSync,
+    BridgeStats, DbBridgeEvent, DbChainTransaction, DbMerkleNode, DbMerkleTree, NewBridgeEvent,
+    NewChainTransaction, NewMerkleNode, NewMerkleTree, NewRootSync,
 };
 
-use crate::models::model::{
-    EthereumFill, EthereumIntent, IntentCreatedEvent, MantleFill, MantleIntent,
-};
+use crate::models::model::{EthereumFill, IntentCreatedEvent, MantleFill};
 use crate::models::schema::{
-    bridge_events, chain_transactions, ethereum_sepolia_intent_created, indexer_checkpoints,
-    mantle_sepolia_intent_created, merkle_trees, root_syncs,
+    bridge_events, chain_transactions, indexer_checkpoints, merkle_trees, root_syncs,
 };
 use crate::{
     database::model::{DbIntent, DbIntentPrivacyParams, NewIntent, NewIntentPrivacyParams},

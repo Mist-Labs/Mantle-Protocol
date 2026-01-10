@@ -78,7 +78,6 @@ impl MerkleProofGenerator {
             limit
         );
 
-        // ✅ FIX: Fetch EXACTLY 'limit' leaves to match contract state
         let mut leaves = self
             .database
             .get_commitments_for_tree(chain, limit as i64)?;
@@ -91,20 +90,7 @@ impl MerkleProofGenerator {
             ));
         }
 
-        // Single leaf tree - no proof needed
-        if leaves.len() == 1 {
-            if leaves[0].to_lowercase() != commitment.to_lowercase() {
-                return Err(anyhow!(
-                    "Single leaf tree: commitment mismatch. Expected {}, got {}",
-                    &leaves[0][..10],
-                    &commitment[..10]
-                ));
-            }
-            info!("📋 Single leaf tree, returning leaf as root");
-            return Ok((Vec::new(), 0, leaves[0].clone()));
-        }
-
-        // Find commitment index
+        // Find commitment index BEFORE padding
         let leaf_index = leaves
             .iter()
             .position(|c| c.to_lowercase() == commitment.to_lowercase())
@@ -123,47 +109,35 @@ impl MerkleProofGenerator {
             leaves.len()
         );
 
-        // Pad leaves to next power of 2
-        let tree_size = Self::next_power_of_2(limit);
+        let tree_size = std::cmp::max(2, Self::next_power_of_2(leaves.len()));
         leaves.resize(tree_size, ZERO_LEAF.to_string());
 
-        // Calculate tree height
-        let mut height = 0;
-        let mut temp = tree_size;
-        while temp > 1 {
-            height += 1;
-            temp /= 2;
-        }
+        let height = (tree_size as f64).log2() as usize;
 
-        info!("🌳 Tree size: {}, height: {}", tree_size, height);
+        info!("🌳 Tree size: {} (min 2), height: {}", tree_size, height);
 
         let mut layer = leaves;
         let mut proof = Vec::with_capacity(height);
         let mut current_index = leaf_index;
-        let mut current_size = tree_size;
 
-        // Build proof by traversing up the tree
         for level in 0..height {
             let sibling_index = current_index ^ 1;
             proof.push(layer[sibling_index].clone());
 
             debug!(
-                "  Level {}: index={}, sibling_index={}, sibling={}",
+                "  Level {}: index={}, sibling={}",
                 level,
                 current_index,
-                sibling_index,
                 &layer[sibling_index][..10]
             );
 
-            // Build next level
-            let mut next_layer = Vec::with_capacity(current_size / 2);
-            for i in 0..(current_size / 2) {
+            let mut next_layer = Vec::with_capacity(layer.len() / 2);
+            for i in 0..(layer.len() / 2) {
                 next_layer.push(Self::hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
             }
 
             layer = next_layer;
             current_index /= 2;
-            current_size /= 2;
         }
 
         let root = layer[0].clone();
@@ -267,7 +241,6 @@ impl MerkleProofGenerator {
             limit
         );
 
-        // ✅ Fetch EXACTLY 'limit' fills to match contract state
         let mut fills = self.database.get_fills_for_tree(chain, limit as i64)?;
 
         if fills.is_empty() {
@@ -278,20 +251,6 @@ impl MerkleProofGenerator {
             ));
         }
 
-        // Single fill tree - no proof needed
-        if fills.len() == 1 {
-            if fills[0].to_lowercase() != intent_id.to_lowercase() {
-                return Err(anyhow!(
-                    "Single fill tree: intent_id mismatch. Expected {}, got {}",
-                    &fills[0][..10],
-                    &intent_id[..10]
-                ));
-            }
-            info!("📋 Single fill tree, returning intent_id as root");
-            return Ok((Vec::new(), 0, fills[0].clone()));
-        }
-
-        // Find intent_id index
         let fill_index = fills
             .iter()
             .position(|f| f.to_lowercase() == intent_id.to_lowercase())
@@ -310,47 +269,38 @@ impl MerkleProofGenerator {
             fills.len()
         );
 
-        // Pad fills to next power of 2
-        let tree_size = Self::next_power_of_2(limit);
+        let tree_size = std::cmp::max(2, Self::next_power_of_2(fills.len()));
         fills.resize(tree_size, ZERO_LEAF.to_string());
 
-        // Calculate tree height
-        let mut height = 0;
-        let mut temp = tree_size;
-        while temp > 1 {
-            height += 1;
-            temp /= 2;
-        }
+        let height = (tree_size as f64).log2() as usize;
 
-        info!("🌳 Fill tree size: {}, height: {}", tree_size, height);
+        info!(
+            "🌳 Fill tree size: {} (min 2), height: {}",
+            tree_size, height
+        );
 
         let mut layer = fills;
         let mut proof = Vec::with_capacity(height);
         let mut current_index = fill_index;
-        let mut current_size = tree_size;
 
-        // Build proof by traversing up the tree
         for level in 0..height {
             let sibling_index = current_index ^ 1;
             proof.push(layer[sibling_index].clone());
 
             debug!(
-                "  Level {}: index={}, sibling_index={}, sibling={}",
+                "  Level {}: index={}, sibling={}",
                 level,
                 current_index,
-                sibling_index,
                 &layer[sibling_index][..10]
             );
 
-            // Build next level
-            let mut next_layer = Vec::with_capacity(current_size / 2);
-            for i in 0..(current_size / 2) {
+            let mut next_layer = Vec::with_capacity(layer.len() / 2);
+            for i in 0..(layer.len() / 2) {
                 next_layer.push(Self::hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
             }
 
             layer = next_layer;
             current_index /= 2;
-            current_size /= 2;
         }
 
         let root = layer[0].clone();

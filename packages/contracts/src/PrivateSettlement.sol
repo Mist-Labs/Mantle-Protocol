@@ -15,11 +15,6 @@ import {
 } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {IPoseidonHasher} from "./interface.sol";
 
-/**
- * @title PrivateSettlement (Destination Chain Contract)
- * @notice FIXED: Power-of-2 zero padding + OpenZeppelin MerkleProof
- * @dev Eliminates orphan edge cases, uses battle-tested OZ verification
- */
 contract PrivateSettlement is ReentrancyGuard, Ownable {
     using ECDSA for bytes32;
 
@@ -60,10 +55,13 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
     bytes32[] public fillTree;
     mapping(bytes32 => uint256) public fillIndex;
 
-    IPoseidonHasher public immutable POSEIDON_HASHER;
-    address public immutable RELAYER;
-    address public immutable FEE_COLLECTOR;
+    IPoseidonHasher public POSEIDON_HASHER;
+    address public RELAYER;
+    address public FEE_COLLECTOR;
 
+    bool public paused;
+    uint256 public pausedAt;
+    uint256 public constant EMERGENCY_WITHDRAW_DELAY = 30 days;
     uint256 public constant FEE_BPS = 20;
     address public constant NATIVE_ETH =
         address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
@@ -103,6 +101,20 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         bytes32[] proof,
         uint256 leafIndex
     );
+    event ContractPaused(bool paused);
+    event RelayerUpdated(
+        address indexed oldRelayer,
+        address indexed newRelayer
+    );
+    event PoseidonHasherUpdated(
+        address indexed oldHasher,
+        address indexed newHasher
+    );
+    event EmergencyWithdrawal(
+        address indexed token,
+        uint256 amount,
+        address indexed recipient
+    );
 
     error InvalidProof();
     error InvalidToken();
@@ -126,9 +138,18 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
     error InvalidTokenConfig();
     error IntentExpired();
     error DirectETHDepositNotAllowed();
+    error ContractIsPaused();
+    error ContractNotPaused();
+    error InvalidAddress();
+    error EmergencyPeriodNotReached();
 
     modifier onlyRelayer() {
         if (msg.sender != RELAYER) revert Unauthorized();
+        _;
+    }
+
+    modifier whenNotPaused() {
+        if (paused) revert ContractIsPaused();
         _;
     }
 
@@ -143,9 +164,6 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         POSEIDON_HASHER = IPoseidonHasher(_poseidonHasher);
     }
 
-    /**
-     * @notice Register intent using OZ MerkleProof verification
-     */
     function registerIntent(
         bytes32 intentId,
         bytes32 commitment,
@@ -156,7 +174,7 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         bytes32 sourceRoot,
         bytes32[] calldata proof,
         uint256 leafIndex
-    ) external onlyRelayer {
+    ) external onlyRelayer whenNotPaused {
         if (intentParams[intentId].exists) revert AlreadyRegistered();
 
         TokenConfig storage config = tokenConfigs[destToken];
@@ -166,13 +184,12 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
             destAmount > config.maxFillAmount
         ) revert InvalidAmount();
 
-        // Verify commitment exists on source chain using OZ
         if (!MerkleProof.verify(proof, sourceRoot, commitment)) {
             revert InvalidProof();
         }
 
-        // Verify synced root matches
-        if (sourceChainCommitmentRoots[sourceChain] != sourceRoot) revert InvalidProof();
+        if (sourceChainCommitmentRoots[sourceChain] != sourceRoot)
+            revert InvalidProof();
 
         intentParams[intentId] = IntentParams({
             commitment: commitment,
@@ -201,7 +218,7 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         uint32 sourceChain,
         address token,
         uint256 amount
-    ) external payable nonReentrant {
+    ) external payable nonReentrant whenNotPaused {
         if (fills[intentId].solver != address(0)) revert AlreadyFilled();
 
         TokenConfig storage config = tokenConfigs[token];
@@ -312,6 +329,34 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         emit WithdrawalClaimed(intentId, nullifier, fill.token);
     }
 
+    function pauseContract() external onlyOwner {
+        paused = !paused;
+        if (paused) pausedAt = block.timestamp;
+        emit ContractPaused(paused);
+    }
+
+    function emergencyWithdraw(
+        address token,
+        uint256 amount
+    ) external onlyOwner {
+        if (!paused) revert ContractNotPaused();
+        if (block.timestamp < pausedAt + EMERGENCY_WITHDRAW_DELAY)
+            revert EmergencyPeriodNotReached();
+
+        if (token == NATIVE_ETH) {
+            if (address(this).balance < amount) revert InsufficientBalance();
+            (bool success, ) = FEE_COLLECTOR.call{value: amount}("");
+            if (!success) revert TransferFailed();
+        } else {
+            if (IERC20(token).balanceOf(address(this)) < amount)
+                revert InsufficientBalance();
+            if (!IERC20(token).transfer(FEE_COLLECTOR, amount))
+                revert TransferFailed();
+        }
+
+        emit EmergencyWithdrawal(token, amount, FEE_COLLECTOR);
+    }
+
     function addSupportedToken(
         address token,
         uint256 minAmount,
@@ -377,6 +422,20 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         emit CommitmentRootSynced(chainId, root);
     }
 
+    function updateRelayer(address newRelayer) external onlyOwner {
+        if (newRelayer == address(0)) revert InvalidAddress();
+        address oldRelayer = RELAYER;
+        RELAYER = newRelayer;
+        emit RelayerUpdated(oldRelayer, newRelayer);
+    }
+
+    function updatePoseidonHasher(address newHasher) external onlyOwner {
+        if (newHasher == address(0)) revert InvalidAddress();
+        address oldHasher = address(POSEIDON_HASHER);
+        POSEIDON_HASHER = IPoseidonHasher(newHasher);
+        emit PoseidonHasherUpdated(oldHasher, newHasher);
+    }
+
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
         return
             a < b
@@ -384,15 +443,13 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
                 : keccak256(abi.encodePacked(b, a));
     }
 
-    /**
-     * @notice FIXED: Power-of-2 zero padding (no orphans!)
-     */
     function _computeMerkleRoot() internal view returns (bytes32) {
         uint256 n = fillTree.length;
         if (n == 0) return bytes32(0);
-        if (n == 1) return fillTree[0];
 
         uint256 treeSize = _nextPowerOf2(n);
+        if (treeSize < 2) treeSize = 2;
+
         bytes32[] memory layer = new bytes32[](treeSize);
 
         for (uint256 i = 0; i < n; i++) {
@@ -412,9 +469,6 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         return layer[0];
     }
 
-    /**
-     * @notice FIXED: Generate proof compatible with OZ MerkleProof.verify
-     */
     function generateFillProof(
         bytes32 intentId
     ) external view returns (bytes32[] memory) {
@@ -423,6 +477,7 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
 
         uint256 n = fillTree.length;
         uint256 treeSize = _nextPowerOf2(n);
+        if (treeSize < 2) treeSize = 2;
 
         uint256 height = 0;
         uint256 temp = treeSize;
@@ -473,46 +528,56 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         return n + 1;
     }
 
-    // VIEW FUNCTIONS
     function getIntentParams(
         bytes32 intentId
     ) external view returns (IntentParams memory) {
         return intentParams[intentId];
     }
+
     function getTokenConfig(
         address token
     ) external view returns (TokenConfig memory) {
         return tokenConfigs[token];
     }
+
     function isIntentRegistered(bytes32 intentId) external view returns (bool) {
         return intentParams[intentId].exists;
     }
+
     function getFill(bytes32 intentId) external view returns (Fill memory) {
         return fills[intentId];
     }
+
     function getFillIndex(bytes32 intentId) external view returns (uint256) {
         return fillIndex[intentId];
     }
+
     function isNullifierUsed(bytes32 nullifier) external view returns (bool) {
         return nullifiers[nullifier];
     }
+
     function getMerkleRoot() external view returns (bytes32) {
         return _computeMerkleRoot();
     }
+
     function getSourceChainRoot(
         uint32 chainId
     ) external view returns (bytes32) {
         return sourceChainCommitmentRoots[chainId];
     }
+
     function getFillTreeSize() external view returns (uint256) {
         return fillTree.length;
     }
+
     function getSupportedTokens() external view returns (address[] memory) {
         return tokenList;
     }
+
     function getSupportedTokenCount() external view returns (uint256) {
         return tokenList.length;
     }
+
     function isTokenSupported(address token) external view returns (bool) {
         return tokenConfigs[token].supported;
     }

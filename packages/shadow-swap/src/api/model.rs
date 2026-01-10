@@ -64,7 +64,6 @@ pub struct IndexerEventRequest {
     pub transaction_hash: String,
     pub block_number: u64,
     pub event_data: serde_json::Value,
-    #[serde(default)]
     pub log_index: u32,
 }
 

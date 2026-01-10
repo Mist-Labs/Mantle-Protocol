@@ -19,7 +19,7 @@ use crate::{
             IntentStatusResponse, PriceRequest, PriceResponse, PriceSourceInfo, StatsResponse,
         },
     },
-    models::model::{Intent, IntentStatus, TokenType},
+    models::model::TokenType,
 };
 
 // ============================================================================
@@ -131,60 +131,6 @@ pub async fn initiate_bridge(
             });
         }
     };
-
-    let amount_u128 = match request.amount.parse::<u128>() {
-        Ok(a) => a,
-        Err(e) => {
-            return HttpResponse::BadRequest().json(InitiateBridgeResponse {
-                success: false,
-                intent_id: String::new(),
-                commitment: String::new(),
-                message: "Invalid amount format".to_string(),
-                error: Some(e.to_string()),
-            });
-        }
-    };
-
-    // (0.2% bridge fee)
-    let bridge_fee_bps = 20;
-    let fee = amount_u128 * bridge_fee_bps / 10000;
-    let dest_amount = amount_u128 - fee;
-
-    let deadline = Utc::now().timestamp() as u64 + 3600; // 1 hour
-
-    let intent = Intent {
-        id: intent_id.clone(),
-        user_address: request.user_address.clone(),
-        source_chain: request.source_chain.clone(),
-        dest_chain: request.dest_chain.clone(),
-        source_token: request.source_token.clone(),
-        dest_token: request.dest_token.clone(),
-        amount: request.amount.clone(),
-        dest_amount: dest_amount.to_string(),
-        source_commitment: Some(request.commitment.clone()),
-        dest_fill_txid: None,
-        dest_registration_txid: None,
-        source_complete_txid: None,
-        status: IntentStatus::Committed,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-        deadline,
-        refund_address: Some(request.refund_address.clone()),
-        solver_address: None,
-        block_number: None,
-        log_index: None,
-    };
-
-    if let Err(e) = app_state.database.upsert_intent(&intent) {
-        error!("Failed to create intent {}: {}", intent_id, e);
-        return HttpResponse::InternalServerError().json(InitiateBridgeResponse {
-            success: false,
-            intent_id: intent_id.clone(),
-            commitment: String::new(),
-            message: "Failed to initialize bridge intent".to_string(),
-            error: Some(e.to_string()),
-        });
-    }
 
     if let Err(e) = app_state.database.store_intent_privacy_params(
         &intent_id,
