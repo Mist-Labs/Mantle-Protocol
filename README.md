@@ -88,7 +88,7 @@ Enhance with full ZK infrastructure:
 | **Frontend dApp** | `@mantle/frontend` | User interface for private bridging | Next.js, TypeScript, Ethers.js |
 | **Relayer Backend** | `@mantle/shadow-swap` | Off-chain proof generation, root syncing, settlement coordination | Rust (Actix-Web, PostgreSQL, Diesel) |
 | **Event Indexer** | `@mantle/Indexers` | Blockchain event monitoring via Goldsky webhooks | Node.js, TypeScript, BullMQ |
-| **Solver Bot** | `@mantle/solver` | Intent fulfillment and liquidity provision | Node.js, TypeScript |
+| **Solver Bot** | `@mantle/solver` | Intent fulfillment and liquidity provision | Rust (Actix-Web) |
 
 ---
 
@@ -177,26 +177,17 @@ yarn install
 
 #### **Contracts** (`.env` in `packages/contracts/`)
 ```bash
-ETHEREUM_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-MANTLE_RPC_URL=https://rpc.sepolia.mantle.xyz
-PRIVATE_KEY=0x...
-ETHERSCAN_API_KEY=...
+check .env.example (coming soon)
 ```
 
 #### **Relayer** (`.env` in `packages/relayer/`)
 ```bash
-DATABASE_URL=postgresql://user:pass@localhost:5432/shadow_swap
-ETHEREUM_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-MANTLE_RPC_URL=https://rpc.sepolia.mantle.xyz
-RELAYER_PRIVATE_KEY=0x...
-HMAC_SECRET=...
+check .env.example (coming soon)
 ```
 
 #### **Indexer** (`.env` in `packages/indexer/`)
 ```bash
-GOLDSKY_WEBHOOK_SECRET=...
-RELAYER_BASE_URL=http://localhost:8080
-HMAC_SECRET=...
+check .env.example (coming soon)
 ```
 
 ---
@@ -207,13 +198,13 @@ HMAC_SECRET=...
 docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:14
 
 # Terminal 2: Start Relayer
-cd packages/relayer && cargo run --release
+cd packages/shadow-swap && cargo run --release
 
 # Terminal 3: Start Indexer
-yarn workspace @mantle/indexer start
+yarn workspace @mantle/Indexers start
 
 # Terminal 4: Start Solver
-yarn workspace @mantle/solver start
+cd packages/solver && cargo run --release
 
 # Terminal 5: Start Frontend
 yarn workspace @mantle/shadow-swap dev
@@ -347,7 +338,7 @@ Then open a Pull Request to **main** on GitHub.
 
 - **Audits**: Pending (Phase 2)
 - **Bug Bounty**: TBD
-- **Security Contact**: security@mistlabs.xyz
+- **Security Contact**: ebounce500@gmail.com
 
 ### Known Limitations (Phase 1)
 - Centralized relayer (decentralization planned for Phase 2)
@@ -364,10 +355,10 @@ MIT License - See [LICENSE](./LICENSE) for details
 
 ## 🌐 **Links**
 
-- **Website**: https://shadowswap.xyz
-- **Docs**: https://docs.shadowswap.xyz
-- **Discord**: https://discord.gg/shadowswap
-- **Twitter**: https://twitter.com/shadowswap
+- **Website**: coming soon
+- **Docs**: coming soon
+- **Discord**: coming soon
+- **Twitter**: coming soon
 
 ---
 
