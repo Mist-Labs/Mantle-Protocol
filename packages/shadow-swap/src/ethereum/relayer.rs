@@ -475,7 +475,9 @@ impl EthereumRelayer {
 
         self.check_balance().await?;
 
-        let tx = self.settlement.sync_source_chain_commitment_root(chain_id, root);
+        let tx = self
+            .settlement
+            .sync_source_chain_commitment_root(chain_id, root);
 
         if let Err(e) = tx.call().await {
             let revert_reason = Self::extract_revert_reason(&e);

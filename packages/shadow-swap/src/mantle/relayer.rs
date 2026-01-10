@@ -587,7 +587,9 @@ impl MantleRelayer {
 
         self.check_balance().await?;
 
-        let tx = self.settlement.sync_source_chain_commitment_root(chain_id, root);
+        let tx = self
+            .settlement
+            .sync_source_chain_commitment_root(chain_id, root);
 
         match tx.call().await {
             Ok(_) => debug!("   ✓ Sync simulation successful"),

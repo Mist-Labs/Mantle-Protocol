@@ -1,12 +1,12 @@
 use anyhow::{Result, anyhow};
 use chrono::Utc;
-use tracing::{info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{self, Duration};
+use tracing::{info, warn};
 
 use crate::model::SupportedToken;
 
@@ -77,7 +77,10 @@ impl PriceFeedManager {
         if let Err(e) =
             Self::fetch_and_update_price(&self.client, &self.cache, from_symbol, to_symbol).await
         {
-            warn!("Failed to fetch initial price for {}-{}: {}", from_symbol, to_symbol, e);
+            warn!(
+                "Failed to fetch initial price for {}-{}: {}",
+                from_symbol, to_symbol, e
+            );
         }
     }
 
@@ -143,7 +146,13 @@ impl PriceFeedManager {
             cache_guard.insert(pair_key.clone(), price_data);
 
             let source_names: Vec<String> = sources.iter().map(|s| s.source.clone()).collect();
-            info!("💰 Price updated: {} = ${:.4} (from {} sources: {})", pair_key, average_price, count, source_names.join(", "));
+            info!(
+                "💰 Price updated: {} = ${:.4} (from {} sources: {})",
+                pair_key,
+                average_price,
+                count,
+                source_names.join(", ")
+            );
             Ok(())
         } else {
             Err(anyhow!("Failed to fetch price from all sources"))
@@ -164,7 +173,10 @@ impl PriceFeedManager {
             let age = Utc::now().timestamp() - price_data.timestamp;
 
             if age > 120 {
-                warn!("⚠️ Price data for {} is stale ({} seconds old)", pair_key, age);
+                warn!(
+                    "⚠️ Price data for {} is stale ({} seconds old)",
+                    pair_key, age
+                );
             }
 
             if price_data.price > 0.0 {
@@ -175,20 +187,33 @@ impl PriceFeedManager {
         Err(anyhow!("No valid price data for {}", symbol))
     }
 
-    async fn get_cryptocompare_price(client: &Client, from_symbol: &str, to_symbol: &str) -> Result<f64> {
-        let url = format!("https://min-api.cryptocompare.com/data/price?fsym={}&tsyms={}", from_symbol, to_symbol);
+    async fn get_cryptocompare_price(
+        client: &Client,
+        from_symbol: &str,
+        to_symbol: &str,
+    ) -> Result<f64> {
+        let url = format!(
+            "https://min-api.cryptocompare.com/data/price?fsym={}&tsyms={}",
+            from_symbol, to_symbol
+        );
         let response = client.get(&url).send().await?;
 
         if response.status().is_success() {
             let data: serde_json::Value = response.json().await?;
-            let price = data[to_symbol].as_f64().ok_or_else(|| anyhow!("Invalid price format"))?;
+            let price = data[to_symbol]
+                .as_f64()
+                .ok_or_else(|| anyhow!("Invalid price format"))?;
             Ok(price)
         } else {
             Err(anyhow!("API error: {}", response.status()))
         }
     }
 
-    async fn get_coingecko_price(client: &Client, from_symbol: &str, to_symbol: &str) -> Result<f64> {
+    async fn get_coingecko_price(
+        client: &Client,
+        from_symbol: &str,
+        to_symbol: &str,
+    ) -> Result<f64> {
         let from_id = match from_symbol.to_uppercase().as_str() {
             "ETH" | "WETH" => "ethereum",
             "USDC" => "usd-coin",
@@ -198,13 +223,22 @@ impl PriceFeedManager {
         };
 
         let to_currency = to_symbol.to_lowercase();
-        let url = format!("https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies={}", from_id, to_currency);
+        let url = format!(
+            "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies={}",
+            from_id, to_currency
+        );
 
-        let response = client.get(&url).header("Accept", "application/json").send().await?;
+        let response = client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
 
         if response.status().is_success() {
             let data: serde_json::Value = response.json().await?;
-            let price = data[from_id][&to_currency].as_f64().ok_or_else(|| anyhow!("Invalid price format"))?;
+            let price = data[from_id][&to_currency]
+                .as_f64()
+                .ok_or_else(|| anyhow!("Invalid price format"))?;
             Ok(price)
         } else {
             Err(anyhow!("API error: {}", response.status()))
@@ -213,14 +247,20 @@ impl PriceFeedManager {
 
     async fn get_gateio_price(client: &Client, from_symbol: &str) -> Result<f64> {
         let pair = format!("{}_USDT", from_symbol.to_uppercase());
-        let url = format!("https://api.gateio.ws/api/v4/spot/tickers?currency_pair={}", pair);
+        let url = format!(
+            "https://api.gateio.ws/api/v4/spot/tickers?currency_pair={}",
+            pair
+        );
 
         let response = client.get(&url).send().await?;
 
         if response.status().is_success() {
             let data: serde_json::Value = response.json().await?;
             if let Some(ticker) = data.as_array().and_then(|arr| arr.first()) {
-                let price = ticker["last"].as_str().and_then(|s| s.parse::<f64>().ok()).ok_or_else(|| anyhow!("Invalid price format"))?;
+                let price = ticker["last"]
+                    .as_str()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .ok_or_else(|| anyhow!("Invalid price format"))?;
                 Ok(price)
             } else {
                 Err(anyhow!("No ticker data"))
@@ -238,7 +278,10 @@ impl PriceFeedManager {
 
         if response.status().is_success() {
             let data: serde_json::Value = response.json().await?;
-            let price = data["price"].as_str().and_then(|s| s.parse::<f64>().ok()).ok_or_else(|| anyhow!("Invalid price format"))?;
+            let price = data["price"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .ok_or_else(|| anyhow!("Invalid price format"))?;
             Ok(price)
         } else {
             Err(anyhow!("API error: {}", response.status()))

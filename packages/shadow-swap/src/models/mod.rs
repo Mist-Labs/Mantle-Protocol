@@ -1,3 +1,3 @@
 pub mod model;
-pub mod traits;
 pub mod schema;
+pub mod traits;

@@ -7,7 +7,7 @@ use crate::relay_coordinator::model::{EthereumConfig, MantleConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeConfig {
-    pub server: ServerConfig,          
+    pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub ethereum: EthereumConfig,
     pub mantle: MantleConfig,
@@ -166,7 +166,7 @@ pub enum TokenType {
     USDC,
     USDT,
     WETH,
-    MNT
+    MNT,
 }
 
 // #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

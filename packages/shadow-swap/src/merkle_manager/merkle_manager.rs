@@ -385,25 +385,25 @@ impl MerkleTreeManager {
         Ok(())
     }
 
-   fn compute_root_from_leaves(&self, leaves: &[String]) -> Result<String> {
-    if leaves.is_empty() {
-        return Ok(ZERO_LEAF.to_string());
-    }
-
-    let tree_size = std::cmp::max(2, Self::next_power_of_2(leaves.len()));
-    let mut layer: Vec<String> = leaves.to_vec();
-    layer.resize(tree_size, ZERO_LEAF.to_string());
-
-    while layer.len() > 1 {
-        let mut next_layer = Vec::with_capacity(layer.len() / 2);
-        for i in 0..(layer.len() / 2) {
-            next_layer.push(self.hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
+    fn compute_root_from_leaves(&self, leaves: &[String]) -> Result<String> {
+        if leaves.is_empty() {
+            return Ok(ZERO_LEAF.to_string());
         }
-        layer = next_layer;
-    }
 
-    Ok(layer[0].clone())
-}
+        let tree_size = std::cmp::max(2, Self::next_power_of_2(leaves.len()));
+        let mut layer: Vec<String> = leaves.to_vec();
+        layer.resize(tree_size, ZERO_LEAF.to_string());
+
+        while layer.len() > 1 {
+            let mut next_layer = Vec::with_capacity(layer.len() / 2);
+            for i in 0..(layer.len() / 2) {
+                next_layer.push(self.hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
+            }
+            layer = next_layer;
+        }
+
+        Ok(layer[0].clone())
+    }
 
     /// Get commitment proof with specific tree size
     pub async fn get_commitment_proof(
