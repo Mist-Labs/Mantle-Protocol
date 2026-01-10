@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
         mantle_relayer.clone(),
         ethereum_relayer.clone(),
         database.clone(),
-        20,
+        10,
     ));
 
     info!("🎯 Initializing bridge coordinator");
@@ -225,6 +225,7 @@ async fn main() -> Result<()> {
         database.clone(),
         mantle_relayer.clone(),
         ethereum_relayer.clone(),
+        bridge_coordinator.clone(),
     ));
 
     let settlement_handle = task::spawn({

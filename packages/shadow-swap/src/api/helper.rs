@@ -154,6 +154,7 @@ fn store_raw_event(
             serde_json::to_value(&request.event_data).unwrap_or_default(),
             chain_id as i32,
             request.block_number as i64,
+            Some(request.log_index as i32),
             &request.transaction_hash,
         )
         .map_err(|e| {
@@ -176,7 +177,6 @@ pub async fn handle_intent_created_event(
 ) -> HttpResponse {
     info!("📝 Processing intent_created on {}", request.chain);
 
-    // STEP 1: Extract and validate required fields
     let intent_id = match request.event_data.get("intentId").and_then(|v| v.as_str()) {
         Some(id) if !id.is_empty() => id,
         _ => {
@@ -205,7 +205,6 @@ pub async fn handle_intent_created_event(
         }
     };
 
-    // Extract other required fields
     let source_token = request
         .event_data
         .get("sourceToken")
@@ -231,78 +230,54 @@ pub async fn handle_intent_created_event(
         .get("destChain")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let refund_address = request
+        .event_data
+        .get("refundAddress")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
-    // ✅ Extract and convert block_number and log_index
     let block_number = Some(request.block_number as i64);
     let log_index = Some(request.log_index as i32);
 
-    // Check if intent already exists (idempotency check)
-    match app_state.database.get_intent_by_id(intent_id) {
-        Ok(Some(_)) => {
-            info!("Intent {} already exists in intents table", intent_id);
-        }
-        Ok(None) => {
-            let new_intent = Intent {
-                id: intent_id.to_string(),
-                user_address: "0x0000000000000000000000000000000000000000".to_string(),
-                source_chain: request.chain.clone(),
-                dest_chain: dest_chain.to_string(),
-                source_token: source_token.to_string(),
-                dest_token: dest_token.to_string(),
-                amount: source_amount.to_string(),
-                dest_amount: dest_amount.to_string(),
-                source_commitment: Some(commitment.to_string()),
-                dest_fill_txid: None,
-                dest_registration_txid: None,
-                source_complete_txid: None,
-                status: IntentStatus::Committed,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                deadline: (Utc::now().timestamp() + 3600) as u64,
-                refund_address: None,
-                solver_address: None,
-                block_number, // ✅ Now properly set
-                log_index,    // ✅ Now properly set
-            };
+    let intent = Intent {
+        id: intent_id.to_string(),
+        user_address: refund_address.to_string(),
+        source_chain: request.chain.clone(),
+        dest_chain: dest_chain.to_string(),
+        source_token: source_token.to_string(),
+        dest_token: dest_token.to_string(),
+        amount: source_amount.to_string(),
+        dest_amount: dest_amount.to_string(),
+        source_commitment: Some(commitment.to_string()),
+        dest_fill_txid: None,
+        dest_registration_txid: None,
+        source_complete_txid: None,
+        status: IntentStatus::Committed,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        deadline: (Utc::now().timestamp() + 3600) as u64,
+        refund_address: Some(refund_address.to_string()),
+        solver_address: None,
+        block_number,
+        log_index,
+    };
 
-            if let Err(e) = app_state.database.create_intent(&new_intent) {
-                error!(
-                    "CRITICAL: Failed to create intent record: {}. Cannot proceed due to FK constraints.",
-                    e
-                );
-                return HttpResponse::InternalServerError().json(IndexerEventResponse {
-                    success: false,
-                    message: "Failed to create intent record".to_string(),
-                    error: Some(e.to_string()),
-                });
-            }
-            info!(
-                "✅ Intent {} created with block={:?}, log_index={:?}",
-                intent_id, block_number, log_index
-            );
-        }
-        Err(e) => {
-            error!("Database error checking intent: {}", e);
-            return HttpResponse::InternalServerError().json(IndexerEventResponse {
-                success: false,
-                message: "Database error".to_string(),
-                error: Some(e.to_string()),
-            });
-        }
+    if let Err(e) = app_state.database.upsert_intent(&intent) {
+        error!("Failed to upsert intent: {}", e);
+        return HttpResponse::InternalServerError().json(IndexerEventResponse {
+            success: false,
+            message: "Failed to upsert intent".to_string(),
+            error: Some(e.to_string()),
+        });
     }
 
-    // Store raw event
+    info!("✅ Intent {} upserted", intent_id);
+
     match store_raw_event(app_state, "intent_created", request, Some(intent_id)) {
-        Ok(()) => info!("✅ Raw event stored in bridge_events"),
-        Err(e) if e == "duplicate" => {
-            return HttpResponse::Ok().json(IndexerEventResponse {
-                success: true,
-                message: format!("Event already processed (idempotent)"),
-                error: None,
-            });
-        }
+        Ok(()) => info!("✅ Raw event stored"),
+        Err(e) if e == "duplicate" => info!("Event already stored (idempotent)"),
         Err(e) => {
-            error!("CRITICAL: Failed to store raw event: {}", e);
+            error!("Failed to store raw event: {}", e);
             return HttpResponse::InternalServerError().json(IndexerEventResponse {
                 success: false,
                 message: "Failed to persist event".to_string(),
@@ -311,16 +286,7 @@ pub async fn handle_intent_created_event(
         }
     }
 
-    // Add commitment to Merkle tree
-    let chain_id = get_chain_id(&request.chain);
-    if let Err(e) = app_state
-        .merkle_manager
-        .append_commitment(commitment, chain_id)
-        .await
-    {
-        error!("Failed to add commitment to Merkle tree: {}", e);
-    }
-
+    // ✅ Event handler job done - return immediately
     HttpResponse::Ok().json(IndexerEventResponse {
         success: true,
         message: format!("Intent {} committed on {}", intent_id, request.chain),
@@ -356,15 +322,12 @@ pub async fn handle_intent_filled_event(
         }
     };
 
-    // STEP 1: Store raw event FIRST
+    // STEP 1: Store raw event FIRST (idempotency)
     match store_raw_event(app_state, "intent_filled", request, Some(intent_id)) {
         Ok(()) => info!("✅ Raw fill event stored"),
         Err(e) if e == "duplicate" => {
-            return HttpResponse::Ok().json(IndexerEventResponse {
-                success: true,
-                message: "Fill event already processed".to_string(),
-                error: None,
-            });
+            info!("Fill event already stored, but continuing to rebuild tree");
+            // DON'T RETURN - continue to rebuild tree
         }
         Err(e) => {
             error!("CRITICAL: Failed to store raw fill event: {}", e);
@@ -386,35 +349,43 @@ pub async fn handle_intent_filled_event(
 
             if let Err(e) = app_state.database.update_intent(&intent) {
                 error!("Failed to update intent: {}", e);
-                // Raw event is stored, so don't fail
             } else {
                 info!("✅ Intent {} marked as filled", intent_id);
             }
-
-            HttpResponse::Ok().json(IndexerEventResponse {
-                success: true,
-                message: format!("Intent {} filled", intent_id),
-                error: None,
-            })
         }
         Ok(None) => {
             warn!("Intent {} not found in intents table", intent_id);
-            // Raw event is stored, return success
-            HttpResponse::Ok().json(IndexerEventResponse {
-                success: true,
-                message: "Fill event recorded (intent not found)".to_string(),
-                error: None,
-            })
         }
         Err(e) => {
             error!("Database error: {}", e);
-            HttpResponse::Ok().json(IndexerEventResponse {
-                success: true,
-                message: "Fill event recorded (DB error on lookup)".to_string(),
-                error: None,
-            })
         }
     }
+
+    info!("🔄 Force rebuilding fill tree for chain {}", request.chain);
+
+    let rebuild_result = match request.chain.as_str() {
+        "ethereum" | "11155111" => app_state.merkle_manager.rebuild_ethereum_fills_tree().await,
+        "mantle" | "5003" => app_state.merkle_manager.rebuild_mantle_fills_tree().await,
+        _ => {
+            error!("Unknown chain for fill event: {}", request.chain);
+            return HttpResponse::Ok().json(IndexerEventResponse {
+                success: true,
+                message: "Fill recorded but unknown chain".to_string(),
+                error: None,
+            });
+        }
+    };
+
+    match rebuild_result {
+        Ok(()) => info!("✅ Fill tree rebuilt successfully"),
+        Err(e) => error!("❌ Failed to rebuild fill tree: {}", e),
+    }
+
+    HttpResponse::Ok().json(IndexerEventResponse {
+        success: true,
+        message: format!("Intent {} filled by {}", intent_id, solver),
+        error: None,
+    })
 }
 
 pub async fn handle_intent_settled_event(

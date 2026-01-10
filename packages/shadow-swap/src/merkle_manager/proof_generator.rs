@@ -24,7 +24,11 @@ impl MerkleProofGenerator {
             hex::decode(right.trim_start_matches("0x")).context("Failed to decode right hash")?;
 
         if left_bytes.len() != 32 || right_bytes.len() != 32 {
-            return Err(anyhow!("Invalid hash length: left={}, right={}", left_bytes.len(), right_bytes.len()));
+            return Err(anyhow!(
+                "Invalid hash length: left={}, right={}",
+                left_bytes.len(),
+                right_bytes.len()
+            ));
         }
 
         let (first, second) = if left_bytes < right_bytes {
@@ -55,7 +59,7 @@ impl MerkleProofGenerator {
     }
 
     /// Generate Merkle proof for a commitment - FIXED VERSION
-    /// 
+    ///
     /// # Arguments
     /// * `chain` - Chain name ("mantle" or "ethereum")
     /// * `commitment` - The commitment hash to generate proof for
@@ -142,7 +146,7 @@ impl MerkleProofGenerator {
         for level in 0..height {
             let sibling_index = current_index ^ 1;
             proof.push(layer[sibling_index].clone());
-            
+
             debug!(
                 "  Level {}: index={}, sibling_index={}, sibling={}",
                 level,
@@ -156,7 +160,7 @@ impl MerkleProofGenerator {
             for i in 0..(current_size / 2) {
                 next_layer.push(Self::hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
             }
-            
+
             layer = next_layer;
             current_index /= 2;
             current_size /= 2;
@@ -173,7 +177,6 @@ impl MerkleProofGenerator {
         Ok((proof, leaf_index, root))
     }
 
-    /// Compute Merkle root from all commitments
     pub fn compute_root(&self, chain: &str) -> Result<String> {
         let leaves = self.database.get_all_commitments_for_chain(chain)?;
 
@@ -181,11 +184,7 @@ impl MerkleProofGenerator {
             return Ok(ZERO_LEAF.to_string());
         }
 
-        if leaves.len() == 1 {
-            return Ok(leaves[0].clone());
-        }
-
-        let tree_size = Self::next_power_of_2(leaves.len());
+        let tree_size = std::cmp::max(2, Self::next_power_of_2(leaves.len()));
         let mut layer: Vec<String> = leaves;
         layer.resize(tree_size, ZERO_LEAF.to_string());
 
@@ -201,7 +200,13 @@ impl MerkleProofGenerator {
     }
 
     /// Verify a Merkle proof
-    pub fn verify_proof(&self, proof: &[String], root: &str, leaf: &str, index: usize) -> Result<bool> {
+    pub fn verify_proof(
+        &self,
+        proof: &[String],
+        root: &str,
+        leaf: &str,
+        index: usize,
+    ) -> Result<bool> {
         let mut computed_hash = leaf.to_string();
         let mut current_index = index;
 
@@ -212,27 +217,27 @@ impl MerkleProofGenerator {
 
         for (level, proof_element) in proof.iter().enumerate() {
             let is_right = (current_index & 1) == 1;
-            
+
             computed_hash = if is_right {
                 Self::hash_pair(proof_element, &computed_hash)?
             } else {
                 Self::hash_pair(&computed_hash, proof_element)?
             };
-            
+
             debug!(
                 "  Level {}: {} + sibling → {}",
                 level,
                 if is_right { "sibling" } else { "hash" },
                 &computed_hash[..10]
             );
-            
+
             current_index >>= 1;
         }
 
         debug!("  Computed root: {}", &computed_hash[..10]);
 
         let is_valid = computed_hash.to_lowercase() == root.to_lowercase();
-        
+
         if is_valid {
             info!("✅ Proof verification successful");
         } else {
@@ -242,13 +247,160 @@ impl MerkleProofGenerator {
         Ok(is_valid)
     }
 
+    // ============   FILL PROOF    ===============
+    /// Generate Merkle proof for a fill (intent_id in fill tree)
+    ///
+    /// # Arguments
+    /// * `chain` - Chain name ("mantle" or "ethereum")
+    /// * `intent_id` - The intent ID to generate proof for
+    /// * `limit` - The exact number of fills that were synced on-chain
+    pub fn generate_fill_proof(
+        &self,
+        chain: &str,
+        intent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, usize, String)> {
+        info!(
+            "📋 Generating fill proof for chain '{}', intent_id={}, limit={}",
+            chain,
+            &intent_id[..10],
+            limit
+        );
+
+        // ✅ Fetch EXACTLY 'limit' fills to match contract state
+        let mut fills = self.database.get_fills_for_tree(chain, limit as i64)?;
+
+        if fills.is_empty() {
+            return Err(anyhow!(
+                "No fills found for chain '{}' with limit {}",
+                chain,
+                limit
+            ));
+        }
+
+        // Single fill tree - no proof needed
+        if fills.len() == 1 {
+            if fills[0].to_lowercase() != intent_id.to_lowercase() {
+                return Err(anyhow!(
+                    "Single fill tree: intent_id mismatch. Expected {}, got {}",
+                    &fills[0][..10],
+                    &intent_id[..10]
+                ));
+            }
+            info!("📋 Single fill tree, returning intent_id as root");
+            return Ok((Vec::new(), 0, fills[0].clone()));
+        }
+
+        // Find intent_id index
+        let fill_index = fills
+            .iter()
+            .position(|f| f.to_lowercase() == intent_id.to_lowercase())
+            .ok_or_else(|| {
+                anyhow!(
+                    "Intent ID {} not found in first {} fills for chain '{}'",
+                    &intent_id[..10],
+                    limit,
+                    chain
+                )
+            })?;
+
+        info!(
+            "🔍 Found intent_id at index {} (tree has {} fills)",
+            fill_index,
+            fills.len()
+        );
+
+        // Pad fills to next power of 2
+        let tree_size = Self::next_power_of_2(limit);
+        fills.resize(tree_size, ZERO_LEAF.to_string());
+
+        // Calculate tree height
+        let mut height = 0;
+        let mut temp = tree_size;
+        while temp > 1 {
+            height += 1;
+            temp /= 2;
+        }
+
+        info!("🌳 Fill tree size: {}, height: {}", tree_size, height);
+
+        let mut layer = fills;
+        let mut proof = Vec::with_capacity(height);
+        let mut current_index = fill_index;
+        let mut current_size = tree_size;
+
+        // Build proof by traversing up the tree
+        for level in 0..height {
+            let sibling_index = current_index ^ 1;
+            proof.push(layer[sibling_index].clone());
+
+            debug!(
+                "  Level {}: index={}, sibling_index={}, sibling={}",
+                level,
+                current_index,
+                sibling_index,
+                &layer[sibling_index][..10]
+            );
+
+            // Build next level
+            let mut next_layer = Vec::with_capacity(current_size / 2);
+            for i in 0..(current_size / 2) {
+                next_layer.push(Self::hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
+            }
+
+            layer = next_layer;
+            current_index /= 2;
+            current_size /= 2;
+        }
+
+        let root = layer[0].clone();
+
+        info!(
+            "✅ Fill proof generated: {} siblings, root={}",
+            proof.len(),
+            &root[..10]
+        );
+
+        Ok((proof, fill_index, root))
+    }
+
+    pub fn compute_fill_root(&self, chain: &str) -> Result<String> {
+        let fills = self.database.get_all_fills_for_chain(chain)?;
+
+        if fills.is_empty() {
+            return Ok(ZERO_LEAF.to_string());
+        }
+
+        let tree_size = std::cmp::max(2, Self::next_power_of_2(fills.len()));
+        let mut layer: Vec<String> = fills;
+        layer.resize(tree_size, ZERO_LEAF.to_string());
+
+        while layer.len() > 1 {
+            let mut next_layer = Vec::with_capacity(layer.len() / 2);
+            for i in 0..(layer.len() / 2) {
+                next_layer.push(Self::hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
+            }
+            layer = next_layer;
+        }
+
+        Ok(layer[0].clone())
+    }
+
     /// Get Ethereum proof
-    pub fn get_ethereum_proof(&self, commitment: &str, limit: usize) -> Result<(Vec<String>, usize, String)> {
+    pub fn get_ethereum_proof(
+        &self,
+        commitment: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, usize, String)> {
         self.generate_proof("ethereum", commitment, limit)
     }
 
     /// Get Mantle proof
-    pub fn get_mantle_proof(&self, commitment: &str, limit: usize) -> Result<(Vec<String>, usize, String)> {
+    pub fn get_mantle_proof(
+        &self,
+        commitment: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, usize, String)> {
         self.generate_proof("mantle", commitment, limit)
     }
 
@@ -260,6 +412,33 @@ impl MerkleProofGenerator {
     /// Compute Mantle root
     pub fn compute_mantle_root(&self) -> Result<String> {
         self.compute_root("mantle")
+    }
+
+    pub fn get_ethereum_fill_proof(
+        &self,
+        intent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, usize, String)> {
+        self.generate_fill_proof("ethereum", intent_id, limit)
+    }
+
+    /// Get Mantle fill proof
+    pub fn get_mantle_fill_proof(
+        &self,
+        intent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, usize, String)> {
+        self.generate_fill_proof("mantle", intent_id, limit)
+    }
+
+    /// Compute Ethereum fill root
+    pub fn compute_ethereum_fill_root(&self) -> Result<String> {
+        self.compute_fill_root("ethereum")
+    }
+
+    /// Compute Mantle fill root
+    pub fn compute_mantle_fill_root(&self) -> Result<String> {
+        self.compute_fill_root("mantle")
     }
 }
 

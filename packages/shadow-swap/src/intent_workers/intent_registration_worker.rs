@@ -193,59 +193,50 @@ impl IntentRegistrationWorker {
     async fn register_on_ethereum(&self, intent: &Intent, commitment: &str) -> Result<()> {
         info!("📝 [Ethereum] Registering intent {}", &intent.id[..10]);
 
-        let mantle_onchain_root = self.mantle_relayer.get_intent_pool_root().await?;
-        info!("   Mantle on-chain root: {}", &mantle_onchain_root[..18]);
+        info!("   Rebuilding Mantle commitments tree...");
+        self.merkle_manager
+            .rebuild_mantle_commitments_tree()
+            .await?;
 
-        let tree_meta = self
+        let db_root = self
             .database
-            .get_merkle_tree_by_name("mantle_commitments")?
-            .ok_or_else(|| anyhow!("Tree metadata not found"))?;
+            .get_latest_root("mantle_commitments")?
+            .ok_or_else(|| anyhow!("Mantle commitments root not found"))?;
 
-        // Trigger immediate sync with timeout
+        info!("   DB root (Mantle): {}", &db_root[..18]);
+
         let sync_result = tokio::time::timeout(
             Duration::from_secs(120),
-            self.ensure_root_synced_on_ethereum(&mantle_onchain_root),
+            self.ensure_root_synced_on_ethereum(&db_root),
         )
         .await;
 
         match sync_result {
-            Ok(Ok(())) => info!("   ✅ Root sync verified"),
+            Ok(Ok(())) => info!("   ✅ Root synced to Ethereum"),
             Ok(Err(e)) => return Err(anyhow!("Root sync failed: {}", e)),
             Err(_) => return Err(anyhow!("Root sync timeout after 2min")),
         }
 
-        // Generate Merkle proof
+        let tree_meta = self
+            .database
+            .get_merkle_tree_by_name("mantle_commitments")?
+            .ok_or_else(|| anyhow!("Mantle tree metadata not found"))?;
+
         let proof_gen = self.merkle_manager.get_proof_generator();
         let (proof, commitment_index, root) =
             proof_gen.generate_proof("mantle", commitment, tree_meta.leaf_count as usize)?;
 
         info!(
-            "   Generated proof - Root: {}, Index: {}, Proof length: {}",
-            &root[..18],
+            "   Proof generated - Index: {}, Length: {}",
             commitment_index,
             proof.len()
         );
 
-        if root.to_lowercase() != mantle_onchain_root.to_lowercase() {
-            return Err(anyhow!(
-                "Root mismatch: computed {} vs on-chain {}",
-                root,
-                mantle_onchain_root
-            ));
-        }
-
-        // Convert token and amount
         let token_type = TokenType::from_address(&intent.source_token)?;
         let dest_token = token_type.get_ethereum_address();
         let dest_amount =
             self.convert_amount(&intent.dest_amount, &intent.source_token, dest_token)?;
 
-        info!(
-            "   Dest token: {}, Dest amount: {}",
-            dest_token, dest_amount
-        );
-
-        // Register on Ethereum
         let txid = self
             .ethereum_relayer
             .register_intent(
@@ -255,13 +246,12 @@ impl IntentRegistrationWorker {
                 &dest_amount,
                 MANTLE_CHAIN_ID,
                 intent.deadline,
-                &mantle_onchain_root,
+                &root,
                 &proof,
                 commitment_index as u32,
             )
             .await?;
 
-        // Update database
         self.database
             .update_dest_registration_txid(&intent.id, &txid)?;
         self.database
@@ -274,61 +264,50 @@ impl IntentRegistrationWorker {
     async fn register_on_mantle(&self, intent: &Intent, commitment: &str) -> Result<()> {
         info!("📝 [Mantle] Registering intent {}", &intent.id[..10]);
 
-        let ethereum_onchain_root = self.ethereum_relayer.get_intent_pool_root().await?;
-        info!(
-            "   Ethereum on-chain root: {}",
-            &ethereum_onchain_root[..18]
-        );
+        info!("   Rebuilding Ethereum commitments tree...");
+        self.merkle_manager
+            .rebuild_ethereum_commitments_tree()
+            .await?;
 
-        let tree_meta = self
+        let db_root = self
             .database
-            .get_merkle_tree_by_name("mantle_commitments")?
-            .ok_or_else(|| anyhow!("Tree metadata not found"))?;
+            .get_latest_root("ethereum_commitments")?
+            .ok_or_else(|| anyhow!("Ethereum commitments root not found"))?;
 
-        // Trigger immediate sync with timeout
+        info!("   DB root (Ethereum): {}", &db_root[..18]);
+
         let sync_result = tokio::time::timeout(
             Duration::from_secs(120),
-            self.ensure_root_synced_on_mantle(&ethereum_onchain_root),
+            self.ensure_root_synced_on_mantle(&db_root),
         )
         .await;
 
         match sync_result {
-            Ok(Ok(())) => info!("   ✅ Root sync verified"),
+            Ok(Ok(())) => info!("   ✅ Root synced to Mantle"),
             Ok(Err(e)) => return Err(anyhow!("Root sync failed: {}", e)),
             Err(_) => return Err(anyhow!("Root sync timeout after 2min")),
         }
 
-        // Generate Merkle proof
+        let tree_meta = self
+            .database
+            .get_merkle_tree_by_name("ethereum_commitments")?
+            .ok_or_else(|| anyhow!("Ethereum tree metadata not found"))?;
+
         let proof_gen = self.merkle_manager.get_proof_generator();
-        let (proof, commitment_index, root) = proof_gen.generate_proof("ethereum", commitment, tree_meta.leaf_count as usize)?;
+        let (proof, commitment_index, root) =
+            proof_gen.generate_proof("ethereum", commitment, tree_meta.leaf_count as usize)?;
 
         info!(
-            "   Generated proof - Root: {}, Index: {}, Proof length: {}",
-            &root[..18],
+            "   Proof generated - Index: {}, Length: {}",
             commitment_index,
             proof.len()
         );
 
-        if root.to_lowercase() != ethereum_onchain_root.to_lowercase() {
-            return Err(anyhow!(
-                "Root mismatch: computed {} vs on-chain {}",
-                root,
-                ethereum_onchain_root
-            ));
-        }
-
-        // Convert token and amount
         let token_type = TokenType::from_address(&intent.source_token)?;
         let dest_token = token_type.get_mantle_address();
         let dest_amount =
             self.convert_amount(&intent.dest_amount, &intent.source_token, dest_token)?;
 
-        info!(
-            "   Dest token: {}, Dest amount: {}",
-            dest_token, dest_amount
-        );
-
-        // Register on Mantle
         let txid = self
             .mantle_relayer
             .register_intent(
@@ -338,19 +317,88 @@ impl IntentRegistrationWorker {
                 &dest_amount,
                 ETHEREUM_CHAIN_ID,
                 intent.deadline,
-                &ethereum_onchain_root,
+                &root,
                 &proof,
                 commitment_index as u32,
             )
             .await?;
 
-        // Update database
         self.database
             .update_dest_registration_txid(&intent.id, &txid)?;
         self.database
             .update_intent_status(&intent.id, IntentStatus::Registered)?;
 
         info!("🎉 [Mantle] Successfully registered: {}", txid);
+        Ok(())
+    }
+
+    async fn ensure_root_synced_on_ethereum(&self, expected_root: &str) -> Result<()> {
+        let synced = self
+            .ethereum_relayer
+            .get_synced_mantle_commitment_root()
+            .await?;
+
+        info!("   Ethereum's view of Mantle root: {}", &synced[..18]);
+
+        if synced.to_lowercase() == expected_root.to_lowercase() {
+            info!("   ✅ Already synced");
+            return Ok(());
+        }
+
+        info!("   🔄 Syncing root to Ethereum...");
+        self.root_sync_coordinator
+            .sync_mantle_commitments_to_ethereum()
+            .await?;
+
+        let new_synced = self
+            .ethereum_relayer
+            .get_synced_mantle_commitment_root()
+            .await?;
+
+        if new_synced.to_lowercase() != expected_root.to_lowercase() {
+            return Err(anyhow!(
+                "Root sync failed. Expected: {}, Got: {}",
+                expected_root,
+                new_synced
+            ));
+        }
+
+        info!("   ✅ Root synced successfully");
+        Ok(())
+    }
+
+    async fn ensure_root_synced_on_mantle(&self, expected_root: &str) -> Result<()> {
+        let synced = self
+            .mantle_relayer
+            .get_synced_ethereum_commitment_root()
+            .await?;
+
+        info!("   Mantle's view of Ethereum root: {}", &synced[..18]);
+
+        if synced.to_lowercase() == expected_root.to_lowercase() {
+            info!("   ✅ Already synced");
+            return Ok(());
+        }
+
+        info!("   🔄 Syncing root to Mantle...");
+        self.root_sync_coordinator
+            .sync_ethereum_commitments_to_mantle()
+            .await?;
+
+        let new_synced = self
+            .mantle_relayer
+            .get_synced_ethereum_commitment_root()
+            .await?;
+
+        if new_synced.to_lowercase() != expected_root.to_lowercase() {
+            return Err(anyhow!(
+                "Root sync failed. Expected: {}, Got: {}",
+                expected_root,
+                new_synced
+            ));
+        }
+
+        info!("   ✅ Root synced successfully");
         Ok(())
     }
 
@@ -380,117 +428,5 @@ impl IntentRegistrationWorker {
         };
 
         Ok(converted.to_string())
-    }
-
-    async fn ensure_root_synced_on_ethereum(&self, expected_mantle_root: &str) -> Result<()> {
-        let synced = self
-            .ethereum_relayer
-            .get_synced_mantle_commitment_root()
-            .await?;
-
-        info!(
-            "   Checking root sync - Expected (Mantle): {} | Synced (Ethereum): {}",
-            &expected_mantle_root[..18],
-            &synced[..18]
-        );
-
-        if synced.to_lowercase() == expected_mantle_root.to_lowercase() {
-            info!("   ✅ Already synced");
-            return Ok(());
-        }
-
-        info!("   🔄 Roots out of sync, triggering immediate sync...");
-        self.root_sync_coordinator
-            .sync_mantle_commitments_to_ethereum()
-            .await?;
-
-        // Verify sync succeeded
-        let new_synced = self
-            .ethereum_relayer
-            .get_synced_mantle_commitment_root()
-            .await?;
-        info!("   After sync - Synced (Ethereum): {}", &new_synced[..18]);
-
-        if new_synced.to_lowercase() != expected_mantle_root.to_lowercase() {
-            return Err(anyhow!(
-                "Root sync failed. Expected: {}, After sync: {}",
-                expected_mantle_root,
-                new_synced
-            ));
-        }
-
-        info!("   ✅ Root sync completed successfully");
-        Ok(())
-    }
-
-    async fn ensure_root_synced_on_mantle(&self, expected_ethereum_root: &str) -> Result<()> {
-        let synced = self
-            .mantle_relayer
-            .get_synced_ethereum_commitment_root()
-            .await?;
-
-        info!(
-            "   Checking root sync - Expected (Ethereum): {} | Synced (Mantle): {}",
-            &expected_ethereum_root[..18],
-            &synced[..18]
-        );
-
-        if synced.to_lowercase() == expected_ethereum_root.to_lowercase() {
-            info!("   ✅ Already synced");
-            return Ok(());
-        }
-
-        info!("   🔄 Roots out of sync, triggering immediate sync...");
-        self.root_sync_coordinator
-            .sync_ethereum_commitments_to_mantle()
-            .await?;
-
-        // Verify sync succeeded
-        let new_synced = self
-            .mantle_relayer
-            .get_synced_ethereum_commitment_root()
-            .await?;
-        info!("   After sync - Synced (Mantle): {}", &new_synced[..18]);
-
-        if new_synced.to_lowercase() != expected_ethereum_root.to_lowercase() {
-            return Err(anyhow!(
-                "Root sync failed. Expected: {}, After sync: {}",
-                expected_ethereum_root,
-                new_synced
-            ));
-        }
-
-        info!("   ✅ Root sync completed successfully");
-        Ok(())
-    }
-
-    pub async fn debug_tree_state(&self, chain: &str) -> Result<()> {
-        info!("🔍 DEBUG: Tree state for {}", chain);
-
-        let leaves = self.database.get_all_commitments_for_chain(chain)?;
-        let proof_gen = self.merkle_manager.get_proof_generator();
-        let computed_root = proof_gen.compute_root(chain)?;
-
-        let db_root = self
-            .database
-            .get_latest_root(&format!("{}_commitments", chain))?;
-
-        let onchain_root = if chain == "mantle" {
-            self.mantle_relayer.get_intent_pool_root().await?
-        } else {
-            self.ethereum_relayer.get_intent_pool_root().await?
-        };
-
-        info!("  Leaves count: {}", leaves.len());
-        info!("  Computed root: {}", computed_root);
-        info!("  DB root: {:?}", db_root);
-        info!("  On-chain root: {}", onchain_root);
-
-        info!("  Leaves:");
-        for (i, leaf) in leaves.iter().enumerate() {
-            info!("    [{}] {}", i, leaf);
-        }
-
-        Ok(())
     }
 }

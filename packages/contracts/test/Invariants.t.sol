@@ -89,7 +89,7 @@ contract PrivacyBridgeHandler is Test {
         bytes32 sourceRoot = intentPool.getMerkleRoot();
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(1, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(1, sourceRoot);
 
         try settlement.registerIntent(intentId, intent.commitment, address(token), intent.destAmount, 1, intent.deadline, sourceRoot, proof, leafIndex) {} catch {
             return;

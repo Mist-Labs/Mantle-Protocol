@@ -50,7 +50,6 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
 
     mapping(bytes32 => Fill) public fills;
     mapping(bytes32 => bool) public nullifiers;
-    mapping(uint32 => bytes32) public sourceChainRoots;
     mapping(uint32 => bytes32) public sourceChainCommitmentRoots;
     mapping(bytes32 => IntentParams) public intentParams;
     mapping(address => TokenConfig) public tokenConfigs;
@@ -173,7 +172,7 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         }
 
         // Verify synced root matches
-        if (sourceChainRoots[sourceChain] != sourceRoot) revert InvalidProof();
+        if (sourceChainCommitmentRoots[sourceChain] != sourceRoot) revert InvalidProof();
 
         intentParams[intentId] = IntentParams({
             commitment: commitment,
@@ -370,14 +369,6 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
         emit TokenRemoved(token);
     }
 
-    function syncSourceChainRoot(
-        uint32 chainId,
-        bytes32 root
-    ) external onlyRelayer {
-        sourceChainRoots[chainId] = root;
-        emit RootSynced(chainId, root);
-    }
-
     function syncSourceChainCommitmentRoot(
         uint32 chainId,
         bytes32 root
@@ -511,7 +502,7 @@ contract PrivateSettlement is ReentrancyGuard, Ownable {
     function getSourceChainRoot(
         uint32 chainId
     ) external view returns (bytes32) {
-        return sourceChainRoots[chainId];
+        return sourceChainCommitmentRoots[chainId];
     }
     function getFillTreeSize() external view returns (uint256) {
         return fillTree.length;

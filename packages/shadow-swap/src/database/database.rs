@@ -129,6 +129,54 @@ impl Database {
         self.pool.get().context("Failed to get database connection")
     }
 
+    // ================= MARKED TO BE DELETED ===================
+    /*
+
+        // ❌ DELETE - Replaced by get_all_commitments_for_chain()
+    pub fn get_all_ethereum_commitments(&self) -> Result<Vec<String>>
+    pub fn get_all_mantle_commitments(&self) -> Result<Vec<String>>
+
+    // ❌ DELETE - Replaced by clear_merkle_tree_completely()
+    pub fn clear_ethereum_commitment_tree(&self) -> Result<()>
+    pub fn clear_mantle_commitment_tree(&self) -> Result<()>
+    pub fn clear_ethereum_commitment_nodes(&self) -> Result<()>
+    pub fn clear_mantle_commitment_nodes(&self) -> Result<()>
+    pub fn clear_ethereum_intent_tree(&self) -> Result<()>
+    pub fn clear_ethereum_fill_tree(&self) -> Result<()>
+    pub fn clear_ethereum_intent_nodes(&self) -> Result<()>
+    pub fn clear_ethereum_fill_nodes(&self) -> Result<()>
+    pub fn clear_mantle_tree(&self) -> Result<()>
+    pub fn clear_mantle_nodes(&self) -> Result<()>
+    pub fn clear_ethereum_tree(&self) -> Result<()>
+    pub fn clear_ethereum_nodes(&self) -> Result<()>
+
+    // ❌ DELETE - Replaced by generic functions
+    pub fn get_ethereum_commitment_tree_size(&self) -> Result<usize>
+    pub fn get_mantle_commitment_tree_size(&self) -> Result<usize>
+    pub fn add_to_ethereum_commitment_tree(&self, _commitment: &str) -> Result<()>
+    pub fn add_to_mantle_commitment_tree(&self, _commitment: &str) -> Result<()>
+    pub fn set_ethereum_commitment_node(...) -> Result<()>
+    pub fn set_mantle_commitment_node(...) -> Result<()>
+    pub fn get_ethereum_commitment_node(...) -> Result<Option<String>>
+    pub fn get_mantle_commitment_node(...) -> Result<Option<String>>
+
+    // ❌ DELETE - Duplicates with wrong names
+    pub fn get_ethereum_tree(&self) -> Result<Vec<String>>  // Use get_all_commitments_for_chain("ethereum")
+    pub fn get_mantle_tree(&self) -> Result<Vec<String>>    // Use get_all_commitments_for_chain("mantle")
+    pub fn get_ethereum_tree_size(&self) -> Result<usize>   // Use get_tree_size("ethereum_commitments")
+    pub fn get_mantle_tree_size(&self) -> Result<usize>     // Use get_tree_size("mantle_commitments")
+    pub fn add_to_ethereum_tree(&self, _intent_id: &str) -> Result<()>
+    pub fn add_to_mantle_tree(&self, _commitment: &str) -> Result<()>
+    pub fn set_ethereum_node(...) -> Result<()>
+    pub fn set_mantle_node(...) -> Result<()>
+    pub fn get_ethereum_node(...) -> Result<Option<String>>
+    pub fn get_mantle_node(...) -> Result<Option<String>>
+
+    // ❌ DELETE - Wrong implementation (uses intents table instead of event tables)
+    pub fn get_all_ethereum_intents(&self) -> Result<Vec<EthereumIntent>>
+    pub fn get_all_mantle_intents(&self) -> Result<Vec<MantleIntent>>
+
+         */
     // ==================== Intent CRUD Operations ====================
 
     pub fn create_intent(&self, intent: &Intent) -> Result<()> {
@@ -223,6 +271,60 @@ impl Database {
 
             Ok(())
         })?;
+
+        Ok(())
+    }
+
+    pub fn upsert_intent(&self, intent: &Intent) -> Result<()> {
+        let mut conn = self.get_connection()?;
+
+        let exists = intents::table
+            .filter(intents::id.eq(&intent.id))
+            .select(intents::id)
+            .first::<String>(&mut conn)
+            .optional()?
+            .is_some();
+
+        if exists {
+            diesel::update(intents::table.filter(intents::id.eq(&intent.id)))
+                .set((
+                    intents::user_address.eq(&intent.user_address),
+                    intents::block_number.eq(intent.block_number),
+                    intents::log_index.eq(intent.log_index),
+                    intents::deadline.eq(intent.deadline as i64),
+                    intents::updated_at.eq(Utc::now()),
+                ))
+                .execute(&mut conn)
+                .context("Failed to update intent")?;
+        } else {
+            let new_intent = NewIntent {
+                id: &intent.id,
+                user_address: &intent.user_address,
+                source_chain: &intent.source_chain,
+                dest_chain: &intent.dest_chain,
+                source_token: &intent.source_token,
+                dest_token: &intent.dest_token,
+                amount: &intent.amount,
+                dest_amount: &intent.dest_amount,
+                source_commitment: intent.source_commitment.as_deref(),
+                dest_fill_txid: None,
+                dest_registration_txid: None,
+                source_complete_txid: None,
+                status: "committed",
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                deadline: intent.deadline as i64,
+                refund_address: intent.refund_address.as_deref(),
+                solver_address: None,
+                block_number: intent.block_number,
+                log_index: intent.log_index,
+            };
+
+            diesel::insert_into(intents::table)
+                .values(&new_intent)
+                .execute(&mut conn)
+                .context("Failed to create intent")?;
+        }
 
         Ok(())
     }
@@ -555,6 +657,7 @@ impl Database {
         chain: &str,
         tx_hash: &str,
         block_number: u64,
+        log_index: Option<i32>,
     ) -> Result<()> {
         let chain_id = match chain {
             "ethereum" => 11155111,
@@ -578,6 +681,7 @@ impl Database {
             event_data,
             chain_id,
             block_number as i64,
+            log_index,
             tx_hash,
         )
     }
@@ -631,6 +735,7 @@ impl Database {
             event_data,
             0,
             0,
+            Some(0),
             tx_hash,
         )
     }
@@ -778,6 +883,7 @@ impl Database {
         event_data: Value,
         chain_id: i32,
         block_number: i64,
+        log_index: Option<i32>,
         transaction_hash: &str,
     ) -> Result<()> {
         let mut conn = self.get_connection()?;
@@ -789,6 +895,7 @@ impl Database {
             event_data,
             chain_id,
             block_number,
+            log_index,
             transaction_hash,
             timestamp: Utc::now(),
             created_at: Utc::now(),
@@ -1408,14 +1515,7 @@ impl Database {
     }
 
     pub fn reset_leaf_count(&self, tree_id: i32) -> Result<()> {
-        use crate::models::schema::merkle_trees;
-        let mut conn = self.get_connection()?;
-
-        diesel::update(merkle_trees::table.filter(merkle_trees::tree_id.eq(tree_id)))
-            .set(merkle_trees::leaf_count.eq(0))
-            .execute(&mut conn)
-            .context("Failed to reset leaf count")?;
-        Ok(())
+        self.set_leaf_count(tree_id, 0)
     }
 
     pub fn set_leaf_count(&self, tree_id: i32, count: i64) -> Result<()> {
@@ -1681,6 +1781,7 @@ impl Database {
             event_data,
             0, // Chain ID 0 for cross-chain syncs
             0, // Block number not applicable
+            Some(0),
             tx_hash,
         )?;
 
@@ -1861,6 +1962,95 @@ impl Database {
         );
 
         Ok(commitments)
+    }
+
+    pub fn get_all_fills_for_chain(&self, chain_name: &str) -> Result<Vec<String>> {
+        use crate::models::schema::bridge_events::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let chain_id_value = match chain_name {
+            "ethereum" => 11155111,
+            "mantle" => 5003,
+            _ => return Err(anyhow!("Unknown chain: {}", chain_name)),
+        };
+
+        let fills: Vec<String> = bridge_events
+            .filter(event_type.eq("intent_filled"))
+            .filter(chain_id.eq(chain_id_value))
+            .filter(block_number.is_not_null())
+            .filter(log_index.is_not_null())
+            .order((block_number.asc(), log_index.asc()))
+            .load::<DbBridgeEvent>(&mut conn)
+            .context("Failed to load fills from bridge_events table")?
+            .into_iter()
+            .filter_map(|e| {
+                e.event_data
+                    .get("intentId")
+                    .or_else(|| e.event_data.get("intent_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .collect();
+
+        info!("📊 Loaded {} fills for chain '{}'", fills.len(), chain_name);
+
+        Ok(fills)
+    }
+
+    pub fn get_fills_for_tree(&self, chain_name: &str, limit: i64) -> Result<Vec<String>> {
+        use crate::models::schema::bridge_events::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let chain_id_value = match chain_name {
+            "ethereum" => 11155111,
+            "mantle" => 5003,
+            _ => return Err(anyhow!("Unknown chain: {}", chain_name)),
+        };
+
+        let fills: Vec<String> = bridge_events
+            .filter(event_type.eq("intent_filled"))
+            .filter(chain_id.eq(chain_id_value))
+            .filter(block_number.is_not_null())
+            .filter(log_index.is_not_null())
+            .order((block_number.asc(), log_index.asc()))
+            .limit(limit)
+            .load::<DbBridgeEvent>(&mut conn)
+            .context("Failed to load fills from bridge_events table")?
+            .into_iter()
+            .filter_map(|e| {
+                e.event_data
+                    .get("intentId")
+                    .or_else(|| e.event_data.get("intent_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .collect();
+
+        info!(
+            "📊 Loaded {} fills (limit: {}) for chain '{}'",
+            fills.len(),
+            limit,
+            chain_name
+        );
+
+        Ok(fills)
+    }
+
+    pub fn get_last_indexed_block(&self, chain: &str) -> Result<Option<u64>> {
+        use crate::models::schema::intents::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let last_block = intents
+            .filter(source_chain.eq(chain))
+            .filter(block_number.is_not_null())
+            .order(block_number.desc())
+            .select(block_number)
+            .first::<Option<i64>>(&mut conn)
+            .optional()?
+            .flatten()
+            .map(|b| b as u64);
+
+        Ok(last_block)
     }
 
     // ==================== Statistics ====================

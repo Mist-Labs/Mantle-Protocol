@@ -40,7 +40,6 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
 
     mapping(bytes32 => Intent) public intents;
     mapping(bytes32 => bool) public commitments;
-    mapping(uint32 => bytes32) public destChainRoots;
     mapping(uint32 => bytes32) public destChainFillRoots;
     mapping(bytes32 => address) public intentSolvers;
     mapping(address => TokenConfig) public tokenConfigs;
@@ -55,6 +54,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     address public immutable RELAYER;
     address public immutable FEE_COLLECTOR;
 
+    uint256 public commitmentsCount;
     uint256 public constant DEFAULT_INTENT_TIMEOUT = 6 hours;
     uint256 public constant FEE_BPS = 20; // 0.2%
     address public constant NATIVE_ETH =
@@ -186,6 +186,8 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         commitmentTree.push(commitment);
         commitmentIndex[commitment] = commitmentTree.length - 1;
 
+        commitmentsCount = commitmentsCount + 1;
+
         if (sourceToken == NATIVE_ETH) {
             if (msg.value != sourceAmount) revert InvalidAmount();
         } else {
@@ -232,7 +234,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         if (intent.filled || intent.refunded) revert IntentAlreadySettled();
         if (solver == address(0)) revert InvalidAddress();
 
-        bytes32 destRoot = destChainRoots[intent.destChain];
+        bytes32 destRoot = destChainFillRoots[intent.destChain];
         if (destRoot == bytes32(0)) revert RootNotSynced();
 
         // Use OpenZeppelin's battle-tested verification
@@ -273,20 +275,6 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
         }
 
         emit IntentSettled(intentId, solver, destRoot);
-    }
-
-    /**
-     * @notice Sync destination chain merkle root from settlement contract
-     * @dev Called by relayer to update proof verification root
-     * @param chainId Destination chain identifier
-     * @param root Merkle root from destination chain's PrivateSettlement.fillTree
-     */
-    function syncDestChainRoot(
-        uint32 chainId,
-        bytes32 root
-    ) external onlyRelayer {
-        destChainRoots[chainId] = root;
-        emit RootSynced(chainId, root);
     }
 
     /**
@@ -551,7 +539,7 @@ contract PrivateIntentPool is ReentrancyGuard, Ownable {
     }
 
     function getDestChainRoot(uint32 chainId) external view returns (bytes32) {
-        return destChainRoots[chainId];
+        return destChainFillRoots[chainId];
     }
 
     function getSolver(bytes32 intentId) external view returns (address) {

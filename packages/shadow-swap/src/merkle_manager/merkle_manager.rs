@@ -61,9 +61,15 @@ impl MerkleTreeManager {
         // Rebuild commitment trees from database
         info!("🔄 Rebuilding Mantle commitments tree...");
         self.rebuild_mantle_commitments_tree().await?;
-        
+
         info!("🔄 Rebuilding Ethereum commitments tree...");
         self.rebuild_ethereum_commitments_tree().await?;
+
+        info!("🔄 Rebuilding Mantle fills tree...");
+        self.rebuild_mantle_fills_tree().await?;
+
+        info!("🔄 Rebuilding Ethereum fills tree...");
+        self.rebuild_ethereum_fills_tree().await?;
 
         // Verify consistency
         for tree_name in &["mantle_commitments", "ethereum_commitments"] {
@@ -88,11 +94,11 @@ impl MerkleTreeManager {
 
         let result = match chain_id {
             MANTLE_CHAIN_ID => {
-                self.append_leaf_to_tree("mantle_commitments", commitment)
+                self.append_commitment_to_tree("mantle_commitments", commitment)
                     .await
             }
             ETHEREUM_CHAIN_ID => {
-                self.append_leaf_to_tree("ethereum_commitments", commitment)
+                self.append_commitment_to_tree("ethereum_commitments", commitment)
                     .await
             }
             _ => Err(anyhow!("Unsupported chain_id: {}", chain_id)),
@@ -102,11 +108,16 @@ impl MerkleTreeManager {
         result
     }
 
-    /// Append a leaf to a specific tree - FIXED VERSION
-    pub async fn append_leaf_to_tree(&self, tree_name: &str, leaf_hash: &str) -> Result<usize> {
+    pub async fn append_commitment_to_tree(
+        &self,
+        tree_name: &str,
+        leaf_hash: &str,
+    ) -> Result<usize> {
         let _lock = self.tree_locks.write().await;
 
-        let tree = self.database.ensure_merkle_tree(tree_name, self.tree_depth as i32)?;
+        let tree = self
+            .database
+            .ensure_merkle_tree(tree_name, self.tree_depth as i32)?;
         let chain_name = if tree_name.contains("mantle") {
             "mantle"
         } else {
@@ -114,9 +125,7 @@ impl MerkleTreeManager {
         };
 
         // ✅ FIX: Fetch ALL current leaves from database, not just up to leaf_count
-        let mut leaves = self
-            .database
-            .get_all_commitments_for_chain(chain_name)?;
+        let mut leaves = self.database.get_all_commitments_for_chain(chain_name)?;
 
         // Check if leaf already exists
         if let Some(existing_index) = leaves
@@ -141,9 +150,10 @@ impl MerkleTreeManager {
 
         // Update tree metadata atomically
         self.database.update_merkle_root(tree.tree_id, &new_root)?;
-        
+
         // ✅ FIX: Set leaf count to ACTUAL count, not increment
-        self.database.set_leaf_count(tree.tree_id, leaves.len() as i64)?;
+        self.database
+            .set_leaf_count(tree.tree_id, leaves.len() as i64)?;
 
         info!(
             "🌳 Tree '{}' updated: root={}, total_leaves={}",
@@ -155,12 +165,66 @@ impl MerkleTreeManager {
         Ok(index)
     }
 
+    pub async fn append_fill_to_tree(&self, tree_name: &str, intent_id: &str) -> Result<usize> {
+        let _lock = self.tree_locks.write().await;
+
+        let tree = self
+            .database
+            .ensure_merkle_tree(tree_name, self.tree_depth as i32)?;
+
+        let chain_name = if tree_name.contains("mantle") {
+            "mantle"
+        } else {
+            "ethereum"
+        };
+
+        let mut fills = self.database.get_all_fills_for_chain(chain_name)?;
+
+        let index = if let Some(existing_index) = fills
+            .iter()
+            .position(|f| f.to_lowercase() == intent_id.to_lowercase())
+        {
+            info!(
+                "⚠️  Fill {} already exists in tree '{}' at index {}, rebuilding tree anyway",
+                &intent_id[..10],
+                tree_name,
+                existing_index
+            );
+            existing_index
+        } else {
+            let new_index = fills.len();
+            fills.push(intent_id.to_string());
+            new_index
+        };
+
+        info!(
+            "🔄 Rebuilding fill tree '{}' with {} fills",
+            tree_name,
+            fills.len()
+        );
+
+        let new_root = self.compute_root_from_leaves(&fills)?;
+
+        self.database.update_merkle_root(tree.tree_id, &new_root)?;
+        self.database
+            .set_leaf_count(tree.tree_id, fills.len() as i64)?;
+
+        info!(
+            "✅ Fill tree '{}' rebuilt: root={}, total_fills={}",
+            tree_name,
+            &new_root[..10],
+            fills.len()
+        );
+
+        Ok(index)
+    }
+
     /// Rebuild Mantle commitments tree from database
     pub async fn rebuild_mantle_commitments_tree(&self) -> Result<()> {
         let tree = self
             .database
             .ensure_merkle_tree("mantle_commitments", self.tree_depth as i32)?;
-        
+
         self.rebuild_tree_from_chain(tree.tree_id, "mantle_commitments", "mantle")
             .await
     }
@@ -170,7 +234,7 @@ impl MerkleTreeManager {
         let tree = self
             .database
             .ensure_merkle_tree("ethereum_commitments", self.tree_depth as i32)?;
-        
+
         self.rebuild_tree_from_chain(tree.tree_id, "ethereum_commitments", "ethereum")
             .await
     }
@@ -180,7 +244,7 @@ impl MerkleTreeManager {
         let tree = self
             .database
             .ensure_merkle_tree("mantle_intents", self.tree_depth as i32)?;
-        
+
         self.rebuild_tree_from_chain(tree.tree_id, "mantle_intents", "mantle")
             .await
     }
@@ -190,34 +254,30 @@ impl MerkleTreeManager {
         let tree = self
             .database
             .ensure_merkle_tree("ethereum_intents", self.tree_depth as i32)?;
-        
+
         self.rebuild_tree_from_chain(tree.tree_id, "ethereum_intents", "ethereum")
             .await
     }
 
-    /// Rebuild Mantle fills tree
     pub async fn rebuild_mantle_fills_tree(&self) -> Result<()> {
         let tree = self
             .database
             .ensure_merkle_tree("mantle_fills", self.tree_depth as i32)?;
-        
-        let fills = self.database.get_all_mantle_fills()?;
-        let leaf_hashes: Vec<String> = fills.into_iter().map(|f| f.intent_id).collect();
-        
-        self.rebuild_tree_from_leaves(tree.tree_id, "mantle_fills", leaf_hashes)
+
+        let fills = self.database.get_all_fills_for_chain("mantle")?;
+
+        self.rebuild_tree_from_leaves(tree.tree_id, "mantle_fills", fills)
             .await
     }
 
-    /// Rebuild Ethereum fills tree
     pub async fn rebuild_ethereum_fills_tree(&self) -> Result<()> {
         let tree = self
             .database
             .ensure_merkle_tree("ethereum_fills", self.tree_depth as i32)?;
-        
-        let fills = self.database.get_all_ethereum_fills()?;
-        let leaf_hashes: Vec<String> = fills.into_iter().map(|f| f.intent_id).collect();
-        
-        self.rebuild_tree_from_leaves(tree.tree_id, "ethereum_fills", leaf_hashes)
+
+        let fills = self.database.get_all_fills_for_chain("ethereum")?;
+
+        self.rebuild_tree_from_leaves(tree.tree_id, "ethereum_fills", fills)
             .await
     }
 
@@ -230,12 +290,13 @@ impl MerkleTreeManager {
     ) -> Result<()> {
         let _lock = self.tree_locks.write().await;
 
-        info!("🔄 Rebuilding tree '{}' from chain '{}'...", tree_name, chain_name);
+        info!(
+            "🔄 Rebuilding tree '{}' from chain '{}'...",
+            tree_name, chain_name
+        );
 
         // ✅ FIX: Fetch ALL leaves from database, don't use limit
-        let leaves = self
-            .database
-            .get_all_commitments_for_chain(chain_name)?;
+        let leaves = self.database.get_all_commitments_for_chain(chain_name)?;
 
         self.rebuild_tree_internal(tree_id, tree_name, leaves).await
     }
@@ -249,56 +310,61 @@ impl MerkleTreeManager {
     ) -> Result<()> {
         let _lock = self.tree_locks.write().await;
 
-        info!("🔄 Rebuilding tree '{}' from {} leaves...", tree_name, leaves.len());
+        info!(
+            "🔄 Rebuilding tree '{}' from {} leaves...",
+            tree_name,
+            leaves.len()
+        );
 
         self.rebuild_tree_internal(tree_id, tree_name, leaves).await
     }
 
-    /// Internal tree rebuild logic - FIXED VERSION
     async fn rebuild_tree_internal(
         &self,
         tree_id: i32,
         tree_name: &str,
         leaves: Vec<String>,
     ) -> Result<()> {
-        // Clear existing tree completely
         self.database.clear_merkle_nodes_by_tree(tree_id)?;
 
         if leaves.is_empty() {
-            info!("⚠️  Tree '{}' has no leaves, setting to zero root", tree_name);
+            info!(
+                "⚠️  Tree '{}' has no leaves, setting to zero root",
+                tree_name
+            );
             self.database.update_merkle_root(tree_id, ZERO_LEAF)?;
             self.database.set_leaf_count(tree_id, 0)?;
             return Ok(());
         }
 
-        info!("📊 Building tree '{}' with {} leaves", tree_name, leaves.len());
+        info!(
+            "📊 Building tree '{}' with {} leaves",
+            tree_name,
+            leaves.len()
+        );
 
-        // Pad to next power of 2
-        let tree_size = Self::next_power_of_2(leaves.len());
+        let tree_size = std::cmp::max(2, Self::next_power_of_2(leaves.len()));
         let mut current_layer = leaves.clone();
         current_layer.resize(tree_size, ZERO_LEAF.to_string());
 
         let mut level = 0;
         let mut current_size = tree_size;
 
-        // Build tree level by level and store all nodes
         while current_size > 0 {
-            // Store all nodes at this level
             for (idx, hash) in current_layer.iter().enumerate() {
                 self.database
                     .store_merkle_node(tree_id, level, idx as i64, hash)?;
             }
 
             if current_size == 1 {
-                break; // Reached root
+                break;
             }
 
-            // Build next level
             let mut next_layer = Vec::with_capacity(current_size / 2);
             for i in 0..(current_size / 2) {
                 next_layer.push(self.hash_pair(&current_layer[2 * i], &current_layer[2 * i + 1])?);
             }
-            
+
             current_layer = next_layer;
             current_size /= 2;
             level += 1;
@@ -306,10 +372,7 @@ impl MerkleTreeManager {
 
         let root = &current_layer[0];
 
-        // Update tree metadata
         self.database.update_merkle_root(tree_id, root)?;
-        
-        // ✅ FIX: Set exact leaf count, don't increment
         self.database.set_leaf_count(tree_id, leaves.len() as i64)?;
 
         info!(
@@ -322,30 +385,25 @@ impl MerkleTreeManager {
         Ok(())
     }
 
-    /// Compute root from a list of leaves
-    fn compute_root_from_leaves(&self, leaves: &[String]) -> Result<String> {
-        if leaves.is_empty() {
-            return Ok(ZERO_LEAF.to_string());
-        }
-
-        if leaves.len() == 1 {
-            return Ok(leaves[0].clone());
-        }
-
-        let tree_size = Self::next_power_of_2(leaves.len());
-        let mut layer: Vec<String> = leaves.to_vec();
-        layer.resize(tree_size, ZERO_LEAF.to_string());
-
-        while layer.len() > 1 {
-            let mut next_layer = Vec::with_capacity(layer.len() / 2);
-            for i in 0..(layer.len() / 2) {
-                next_layer.push(self.hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
-            }
-            layer = next_layer;
-        }
-
-        Ok(layer[0].clone())
+   fn compute_root_from_leaves(&self, leaves: &[String]) -> Result<String> {
+    if leaves.is_empty() {
+        return Ok(ZERO_LEAF.to_string());
     }
+
+    let tree_size = std::cmp::max(2, Self::next_power_of_2(leaves.len()));
+    let mut layer: Vec<String> = leaves.to_vec();
+    layer.resize(tree_size, ZERO_LEAF.to_string());
+
+    while layer.len() > 1 {
+        let mut next_layer = Vec::with_capacity(layer.len() / 2);
+        for i in 0..(layer.len() / 2) {
+            next_layer.push(self.hash_pair(&layer[2 * i], &layer[2 * i + 1])?);
+        }
+        layer = next_layer;
+    }
+
+    Ok(layer[0].clone())
+}
 
     /// Get commitment proof with specific tree size
     pub async fn get_commitment_proof(
@@ -367,6 +425,12 @@ impl MerkleTreeManager {
             .ok_or_else(|| anyhow!("No Mantle intents root found"))
     }
 
+    pub async fn get_mantle_fills_root(&self) -> Result<String> {
+        self.database
+            .get_latest_root("mantle_fills")?
+            .ok_or_else(|| anyhow!("No Mantle fills root found"))
+    }
+
     pub async fn get_mantle_commitments_root(&self) -> Result<String> {
         self.database
             .get_latest_root("mantle_commitments")?
@@ -385,11 +449,28 @@ impl MerkleTreeManager {
             .ok_or_else(|| anyhow!("No Ethereum commitments root found"))
     }
 
+    pub fn get_all_mantle_fills(&self) -> Result<Vec<String>> {
+        self.database.get_all_fills_for_chain("mantle")
+    }
+
+    /// Get all Ethereum fills from database (for proof generation)
+    pub fn get_all_ethereum_fills(&self) -> Result<Vec<String>> {
+        self.database.get_all_fills_for_chain("ethereum")
+    }
+
     pub fn compute_ethereum_fills_root(&self) -> Result<String> {
         let tree = self
             .database
             .get_merkle_tree_by_name("ethereum_fills")?
             .ok_or_else(|| anyhow!("Ethereum fills tree not found"))?;
+        Ok(tree.root)
+    }
+
+    pub fn compute_mantle_fills_root(&self) -> Result<String> {
+        let tree = self
+            .database
+            .get_merkle_tree_by_name("mantle_fills")?
+            .ok_or_else(|| anyhow!("Mantle fills tree not found"))?;
         Ok(tree.root)
     }
 
@@ -415,6 +496,47 @@ impl MerkleTreeManager {
 
     pub fn compute_ethereum_commitments_root(&self) -> Result<String> {
         self.proof_generator.compute_ethereum_root()
+    }
+
+    pub async fn get_mantle_fill_proof(
+        &self,
+        intent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, u32)> {
+        // Get fills instead of commitments for fill tree
+        let fills = self.database.get_fills_for_tree("mantle", limit as i64)?;
+
+        // Find intent_id position in fills
+        let index = fills
+            .iter()
+            .position(|f| f.to_lowercase() == intent_id.to_lowercase())
+            .ok_or_else(|| anyhow!("Intent {} not found in mantle fills", intent_id))?;
+
+        // Generate proof using the same proof generator logic
+        let (proof, index, _root) = self
+            .proof_generator
+            .generate_fill_proof("mantle", intent_id, limit)?;
+
+        Ok((proof, index as u32))
+    }
+
+    pub async fn get_ethereum_fill_proof(
+        &self,
+        intent_id: &str,
+        limit: usize,
+    ) -> Result<(Vec<String>, u32)> {
+        let fills = self.database.get_fills_for_tree("ethereum", limit as i64)?;
+
+        let index = fills
+            .iter()
+            .position(|f| f.to_lowercase() == intent_id.to_lowercase())
+            .ok_or_else(|| anyhow!("Intent {} not found in ethereum fills", intent_id))?;
+
+        let (proof, index, _root) = self
+            .proof_generator
+            .generate_fill_proof("ethereum", intent_id, limit)?;
+
+        Ok((proof, index as u32))
     }
 
     pub async fn get_tree_sizes(&self) -> Result<(usize, usize, usize, usize)> {

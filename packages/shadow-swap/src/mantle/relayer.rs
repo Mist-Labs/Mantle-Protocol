@@ -30,26 +30,26 @@ pub mod mantle_contracts {
             function getMerkleRoot() external view returns (bytes32)
             function getDestChainRoot(uint32 chainId) external view returns (bytes32)
             function destChainFillRoots(uint32 chainId) external view returns (bytes32)
+            function getIntent(bytes32 intentId) external view returns (tuple(bytes32 commitment, address sourceToken, uint256 sourceAmount, address destToken, uint256 destAmount, uint32 destChain, uint64 deadline, address refundTo, bool filled, bool refunded))
         ]"#
     );
 
     abigen!(
         MantleSettlement,
         r#"[
-           function registerIntent(bytes32 intentId, bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bytes32 sourceRoot, bytes32[] calldata proof, uint256 leafIndex) external
-            function fillIntent(bytes32 intentId, bytes32 commitment, uint32 sourceChain, address token, uint256 amount) external payable
-            function claimWithdrawal(bytes32 intentId, bytes32 nullifier, address recipient, bytes32 secret, bytes calldata claimAuth) external
-            function syncSourceChainRoot(uint32 chainId, bytes32 root) external
-            function syncSourceChainCommitmentRoot(uint32 chainId, bytes32 root) external
-            function getMerkleRoot() external view returns (bytes32)
-            function generateFillProof(bytes32 intentId) external view returns (bytes32[] memory)
-            function getFillTreeSize() external view returns (uint256)
-            function getFillIndex(bytes32 intentId) external view returns (uint256)
-            function getFill(bytes32 intentId) external view returns (tuple(address solver, address token, uint256 amount, uint32 sourceChain, uint32 timestamp, bool claimed))
-            function getSourceChainRoot(uint32 chainId) external view returns (bytes32)
-            function sourceChainCommitmentRoots(uint32 chainId) external view returns (bytes32)
-            function getIntentParams(bytes32 intentId) external view returns (tuple(bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bool exists))
-        ]"#
+       function registerIntent(bytes32 intentId, bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bytes32 sourceRoot, bytes32[] calldata proof, uint256 leafIndex) external
+        function fillIntent(bytes32 intentId, bytes32 commitment, uint32 sourceChain, address token, uint256 amount) external payable
+        function claimWithdrawal(bytes32 intentId, bytes32 nullifier, address recipient, bytes32 secret, bytes calldata claimAuth) external
+        function syncSourceChainCommitmentRoot(uint32 chainId, bytes32 root) external
+        function getMerkleRoot() external view returns (bytes32)
+        function generateFillProof(bytes32 intentId) external view returns (bytes32[] memory)
+        function getFillTreeSize() external view returns (uint256)
+        function getFillIndex(bytes32 intentId) external view returns (uint256)
+        function getFill(bytes32 intentId) external view returns (tuple(address solver, address token, uint256 amount, uint32 sourceChain, uint32 timestamp, bool claimed))
+        function getSourceChainRoot(uint32 chainId) external view returns (bytes32)
+        function sourceChainCommitmentRoots(uint32 chainId) external view returns (bytes32)
+        function getIntentParams(bytes32 intentId) external view returns (tuple(bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bool exists))
+    ]"#
     );
 }
 
@@ -222,6 +222,37 @@ impl MantleRelayer {
             .try_into()
             .map_err(|_| anyhow!("Invalid intent_id length"))?;
 
+        // Get intent and destructure
+        let (
+            _commitment,
+            _source_token,
+            _source_amount,
+            _dest_token,
+            _dest_amount,
+            _dest_chain,
+            deadline,
+            _refund_to,
+            filled,
+            refunded,
+        ) = self.intent_pool.get_intent(intent_id_bytes).call().await?;
+
+        if filled {
+            return Err(anyhow!("Intent already filled, cannot refund"));
+        }
+
+        if refunded {
+            return Err(anyhow!("Intent already refunded"));
+        }
+
+        if deadline
+            > std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs()
+        {
+            return Err(anyhow!("Intent not expired yet, deadline: {}", deadline));
+        }
+
+        // Rest of the function...
         let tx = self.intent_pool.refund(intent_id_bytes);
 
         if let Err(e) = tx.call().await {
@@ -505,6 +536,17 @@ impl MantleRelayer {
             .collect())
     }
 
+    pub async fn get_fill_root(&self) -> Result<String> {
+        let root = self
+            .settlement
+            .get_merkle_root()
+            .call()
+            .await
+            .map_err(|e| anyhow!("Failed to get fill merkle root: {}", e))?;
+
+        Ok(format!("0x{}", hex::encode(root)))
+    }
+
     pub async fn get_synced_ethereum_fill_root(&self) -> Result<String> {
         let root_bytes: [u8; 32] = self
             .intent_pool
@@ -545,9 +587,7 @@ impl MantleRelayer {
 
         self.check_balance().await?;
 
-        let tx = self
-            .settlement
-            .sync_source_chain_commitment_root(chain_id, root);
+        let tx = self.settlement.sync_source_chain_commitment_root(chain_id, root);
 
         match tx.call().await {
             Ok(_) => debug!("   ✓ Sync simulation successful"),

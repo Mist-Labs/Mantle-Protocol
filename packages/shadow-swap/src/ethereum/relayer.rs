@@ -30,26 +30,26 @@ pub mod ethereum_contracts {
             function getMerkleRoot() external view returns (bytes32)
             function getDestChainRoot(uint32 chainId) external view returns (bytes32)
             function destChainFillRoots(uint32 chainId) external view returns (bytes32)
+            function getIntent(bytes32 intentId) external view returns (tuple(bytes32 commitment, address sourceToken, uint256 sourceAmount, address destToken, uint256 destAmount, uint32 destChain, uint64 deadline, address refundTo, bool filled, bool refunded))
         ]"#
     );
 
     abigen!(
         EthSettlement,
         r#"[
-           function registerIntent(bytes32 intentId, bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bytes32 sourceRoot, bytes32[] calldata proof, uint256 leafIndex) external
-            function fillIntent(bytes32 intentId, bytes32 commitment, uint32 sourceChain, address token, uint256 amount) external payable
-            function claimWithdrawal(bytes32 intentId, bytes32 nullifier, address recipient, bytes32 secret, bytes calldata claimAuth) external
-            function syncSourceChainRoot(uint32 chainId, bytes32 root) external
-            function syncSourceChainCommitmentRoot(uint32 chainId, bytes32 root) external
-            function getMerkleRoot() external view returns (bytes32)
-            function generateFillProof(bytes32 intentId) external view returns (bytes32[] memory)
-            function getFillTreeSize() external view returns (uint256)
-            function getFillIndex(bytes32 intentId) external view returns (uint256)
-            function getFill(bytes32 intentId) external view returns (tuple(address solver, address token, uint256 amount, uint32 sourceChain, uint32 timestamp, bool claimed))
-            function getSourceChainRoot(uint32 chainId) external view returns (bytes32)
-            function sourceChainCommitmentRoots(uint32 chainId) external view returns (bytes32)
-            function getIntentParams(bytes32 intentId) external view returns (tuple(bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bool exists))
-        ]"#
+       function registerIntent(bytes32 intentId, bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bytes32 sourceRoot, bytes32[] calldata proof, uint256 leafIndex) external
+        function fillIntent(bytes32 intentId, bytes32 commitment, uint32 sourceChain, address token, uint256 amount) external payable
+        function claimWithdrawal(bytes32 intentId, bytes32 nullifier, address recipient, bytes32 secret, bytes calldata claimAuth) external
+        function syncSourceChainCommitmentRoot(uint32 chainId, bytes32 root) external
+        function getMerkleRoot() external view returns (bytes32)
+        function generateFillProof(bytes32 intentId) external view returns (bytes32[] memory)
+        function getFillTreeSize() external view returns (uint256)
+        function getFillIndex(bytes32 intentId) external view returns (uint256)
+        function getFill(bytes32 intentId) external view returns (tuple(address solver, address token, uint256 amount, uint32 sourceChain, uint32 timestamp, bool claimed))
+        function getSourceChainRoot(uint32 chainId) external view returns (bytes32)
+        function sourceChainCommitmentRoots(uint32 chainId) external view returns (bytes32)
+        function getIntentParams(bytes32 intentId) external view returns (tuple(bytes32 commitment, address token, uint256 amount, uint32 sourceChain, uint64 deadline, bool exists))
+    ]"#
     );
 }
 
@@ -209,6 +209,36 @@ impl EthereumRelayer {
             .try_into()
             .map_err(|_| anyhow!("Invalid intent_id length"))?;
 
+        let (
+            _commitment,
+            _source_token,
+            _source_amount,
+            _dest_token,
+            _dest_amount,
+            _dest_chain,
+            deadline,
+            _refund_to,
+            filled,
+            refunded,
+        ) = self.intent_pool.get_intent(intent_id_bytes).call().await?;
+
+        if filled {
+            return Err(anyhow!("Intent already filled, cannot refund"));
+        }
+
+        if refunded {
+            return Err(anyhow!("Intent already refunded"));
+        }
+
+        if deadline
+            > std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs()
+        {
+            return Err(anyhow!("Intent not expired yet, deadline: {}", deadline));
+        }
+
+        // Simulate the transaction
         let tx = self.intent_pool.refund(intent_id_bytes);
 
         if let Err(e) = tx.call().await {
@@ -217,12 +247,15 @@ impl EthereumRelayer {
             return Err(anyhow!("Refund simulation failed: {}", revert_reason));
         }
 
+        // Send the transaction
         let pending = tx.send().await.context("Failed to send refund tx")?;
         let tx_hash = format!("{:?}", pending.tx_hash());
+        info!("   📤 Tx sent: {}", &tx_hash[..10]);
 
         self.log_transaction(intent_id, "refund_intent", &tx_hash, "pending")
             .await?;
 
+        // Wait for confirmation
         let receipt = tokio::time::timeout(TX_TIMEOUT, pending)
             .await
             .context("Refund tx timed out")?
@@ -234,6 +267,7 @@ impl EthereumRelayer {
         } else {
             "reverted"
         };
+
         self.log_transaction(intent_id, "refund_intent", &tx_hash, status)
             .await?;
 
@@ -241,6 +275,7 @@ impl EthereumRelayer {
             return Err(anyhow!("Refund transaction reverted"));
         }
 
+        info!("   ✅ Refunded ({}ms)", start.elapsed().as_millis());
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
@@ -440,9 +475,7 @@ impl EthereumRelayer {
 
         self.check_balance().await?;
 
-        let tx = self
-            .settlement
-            .sync_source_chain_commitment_root(chain_id, root);
+        let tx = self.settlement.sync_source_chain_commitment_root(chain_id, root);
 
         if let Err(e) = tx.call().await {
             let revert_reason = Self::extract_revert_reason(&e);

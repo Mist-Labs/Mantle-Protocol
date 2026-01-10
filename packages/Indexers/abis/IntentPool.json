@@ -353,6 +353,13 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "commitmentsCount",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       { "internalType": "bytes32", "name": "intentId", "type": "bytes32" },
       { "internalType": "bytes32", "name": "commitment", "type": "bytes32" },
@@ -372,13 +379,6 @@
   {
     "inputs": [{ "internalType": "uint32", "name": "", "type": "uint32" }],
     "name": "destChainFillRoots",
-    "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [{ "internalType": "uint32", "name": "", "type": "uint32" }],
-    "name": "destChainRoots",
     "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
     "stateMutability": "view",
     "type": "function"
@@ -612,16 +612,6 @@
       { "internalType": "bytes32", "name": "root", "type": "bytes32" }
     ],
     "name": "syncDestChainFillRoot",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      { "internalType": "uint32", "name": "chainId", "type": "uint32" },
-      { "internalType": "bytes32", "name": "root", "type": "bytes32" }
-    ],
-    "name": "syncDestChainRoot",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

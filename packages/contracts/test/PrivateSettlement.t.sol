@@ -120,7 +120,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -139,7 +139,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -156,7 +156,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -183,7 +183,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -209,7 +209,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -255,7 +255,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -281,7 +281,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -308,7 +308,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -335,7 +335,7 @@ contract PrivateSettlementTest is Test {
             bytes32[] memory proof = new bytes32[](0);
 
             vm.prank(relayer);
-            settlement.syncSourceChainRoot(uint32(i + 1), sourceRoot);
+            settlement.syncSourceChainCommitmentRoot(uint32(i + 1), sourceRoot);
 
             vm.prank(relayer);
             settlement.registerIntent(id, c, address(token), TEST_AMOUNT, uint32(i + 1), uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -359,7 +359,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);
@@ -377,7 +377,7 @@ contract PrivateSettlementTest is Test {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, 0);

@@ -175,7 +175,7 @@ pub async fn initiate_bridge(
         log_index: None,
     };
 
-    if let Err(e) = app_state.database.create_intent(&intent) {
+    if let Err(e) = app_state.database.upsert_intent(&intent) {
         error!("Failed to create intent {}: {}", intent_id, e);
         return HttpResponse::InternalServerError().json(InitiateBridgeResponse {
             success: false,

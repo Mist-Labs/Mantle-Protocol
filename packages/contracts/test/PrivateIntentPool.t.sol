@@ -192,7 +192,7 @@ contract PrivateIntentPoolTest is Test {
         bytes32[] memory proof = new bytes32[](0); // No proof needed for single leaf
 
         vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        pool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
         vm.prank(relayer);
         vm.expectEmit(true, true, false, false);
@@ -233,7 +233,7 @@ contract PrivateIntentPoolTest is Test {
 
         bytes32 destRoot = intentId;
         vm.prank(relayer);
-        pool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        pool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
         bytes32[] memory proof = new bytes32[](0);
 

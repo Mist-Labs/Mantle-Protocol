@@ -648,28 +648,11 @@
     "type": "function"
   },
   {
-    "inputs": [{ "internalType": "uint32", "name": "", "type": "uint32" }],
-    "name": "sourceChainRoots",
-    "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       { "internalType": "uint32", "name": "chainId", "type": "uint32" },
       { "internalType": "bytes32", "name": "root", "type": "bytes32" }
     ],
     "name": "syncSourceChainCommitmentRoot",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      { "internalType": "uint32", "name": "chainId", "type": "uint32" },
-      { "internalType": "bytes32", "name": "root", "type": "bytes32" }
-    ],
-    "name": "syncSourceChainRoot",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

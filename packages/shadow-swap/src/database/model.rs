@@ -138,6 +138,7 @@ pub struct DbBridgeEvent {
     pub transaction_hash: String,
     pub timestamp: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub log_index: Option<i32>,
 }
 
 #[derive(Debug, Insertable)]
@@ -152,6 +153,7 @@ pub struct NewBridgeEvent<'a> {
     pub transaction_hash: &'a str,
     pub timestamp: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub log_index: Option<i32>,
 }
 
 // ==================== Indexer Checkpoints ====================

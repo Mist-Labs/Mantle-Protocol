@@ -148,7 +148,7 @@ impl BridgeCoordinator {
 
     pub async fn start(&self) -> Result<(), String> {
         info!("🌉 Bridge coordinator started (Across-style SpokePool)");
-        
+
         let metrics = Arc::clone(&self.metrics);
         let start_time = self.start_time;
         tokio::spawn(async move {
@@ -177,7 +177,9 @@ impl BridgeCoordinator {
     }
 
     async fn process_pending_intents(&self) -> Result<()> {
-        let pending_intents = self.database.get_pending_intents()
+        let pending_intents = self
+            .database
+            .get_pending_intents()
             .map_err(|e| anyhow!("Failed to get pending intents: {}", e))?;
 
         if pending_intents.is_empty() {
@@ -201,38 +203,75 @@ impl BridgeCoordinator {
         Ok(())
     }
 
-    async fn claim_for_user(&self, intent: &Intent) -> Result<()> {
-        let now = chrono::Utc::now().timestamp() as u64;
-        if now > intent.deadline {
-            info!("⏰ Intent {} expired, refunding", intent.id);
-            return self.handle_refund(intent).await;
-        }
+    pub async fn claim_for_user(&self, intent: &Intent) -> Result<()> {
+        match intent.status {
+            IntentStatus::SolverPaid => {
+                info!("💸 Claiming for user on {}", intent.dest_chain);
 
-        info!("💸 Claiming for user on {}", intent.dest_chain);
-
-        match intent.dest_chain.as_str() {
-            "mantle" | "5003" => self.claim_on_chain(&*self.mantle_relayer, intent, true).await,
-            "ethereum" | "11155111" => self.claim_on_chain(&*self.ethereum_relayer, intent, false).await,
-            _ => Err(anyhow!("Unsupported destination chain: {}", intent.dest_chain)),
+                match intent.dest_chain.as_str() {
+                    "mantle" | "5003" => {
+                        self.claim_on_chain(&*self.mantle_relayer, intent, true)
+                            .await
+                    }
+                    "ethereum" | "11155111" => {
+                        self.claim_on_chain(&*self.ethereum_relayer, intent, false)
+                            .await
+                    }
+                    _ => Err(anyhow!(
+                        "Unsupported destination chain: {}",
+                        intent.dest_chain
+                    )),
+                }
+            }
+            IntentStatus::Registered | IntentStatus::Filled => {
+                let now = chrono::Utc::now().timestamp() as u64;
+                if now > intent.deadline {
+                    info!("⏰ Intent {} expired, refunding", intent.id);
+                    self.handle_refund(intent).await
+                } else {
+                    Ok(())
+                }
+            }
+            IntentStatus::UserClaimed | IntentStatus::Refunded => Ok(()),
+            _ => Ok(()),
         }
     }
 
-    async fn claim_on_chain<T: ChainRelayer>(&self, relayer: &T, intent: &Intent, is_mantle: bool) -> Result<()> {
-        info!("🔓 Claiming on {} for intent {}", if is_mantle { "Mantle" } else { "Ethereum" }, intent.id);
+    async fn claim_on_chain<T: ChainRelayer>(
+        &self,
+        relayer: &T,
+        intent: &Intent,
+        is_mantle: bool,
+    ) -> Result<()> {
+        info!(
+            "🔓 Claiming on {} for intent {}",
+            if is_mantle { "Mantle" } else { "Ethereum" },
+            intent.id
+        );
 
-        let privacy_params = self.database.get_intent_privacy_params(&intent.id)
+        let privacy_params = self
+            .database
+            .get_intent_privacy_params(&intent.id)
             .map_err(|e| anyhow!("Failed to get privacy params: {}", e))?;
 
-        let encrypted_secret = privacy_params.secret.as_ref()
+        let encrypted_secret = privacy_params
+            .secret
+            .as_ref()
             .ok_or_else(|| anyhow!("Encrypted secret not available"))?;
 
-        let encrypted_nullifier = privacy_params.nullifier.as_ref()
+        let encrypted_nullifier = privacy_params
+            .nullifier
+            .as_ref()
             .ok_or_else(|| anyhow!("Encrypted nullifier not available"))?;
 
-        let recipient = privacy_params.recipient.as_ref()
+        let recipient = privacy_params
+            .recipient
+            .as_ref()
             .ok_or_else(|| anyhow!("Recipient not available"))?;
 
-        let claim_auth = privacy_params.claim_signature.as_ref()
+        let claim_auth_hex = privacy_params
+            .claim_signature
+            .as_ref()
             .ok_or_else(|| anyhow!("Claim signature not available"))?;
 
         let relayer_private_key = std::env::var("RELAYER_PRIVATE_KEY")
@@ -244,13 +283,37 @@ impl BridgeCoordinator {
         let nullifier = decrypt_with_ecies(encrypted_nullifier, &relayer_private_key)
             .map_err(|e| anyhow!("Failed to decrypt nullifier: {}", e))?;
 
-        let result = relayer.claim_withdrawal(&intent.id, &nullifier, recipient, &secret, claim_auth.as_bytes()).await;
+        let claim_auth_hex_clean = claim_auth_hex.strip_prefix("0x").unwrap_or(claim_auth_hex);
+        let claim_auth_bytes = hex::decode(claim_auth_hex_clean)
+            .map_err(|e| anyhow!("Failed to decode claim signature hex: {}", e))?;
+
+        if claim_auth_bytes.len() != 65 {
+            return Err(anyhow!(
+                "Invalid signature length: expected 65 bytes, got {}",
+                claim_auth_bytes.len()
+            ));
+        }
+
+        let result = relayer
+            .claim_withdrawal(
+                &intent.id,
+                &nullifier,
+                recipient,
+                &secret,
+                &claim_auth_bytes,
+            )
+            .await;
 
         match result {
             Ok(txid) => {
-                info!("✅ Claimed on {}: {}", if is_mantle { "Mantle" } else { "Ethereum" }, txid);
+                info!(
+                    "✅ Claimed on {}: {}",
+                    if is_mantle { "Mantle" } else { "Ethereum" },
+                    txid
+                );
 
-                self.database.update_intent_status(&intent.id, IntentStatus::UserClaimed)
+                self.database
+                    .update_intent_status(&intent.id, IntentStatus::UserClaimed)
                     .map_err(|e| anyhow!("Failed to update status: {}", e))?;
 
                 let mut metrics = self.metrics.write().await;
@@ -269,7 +332,10 @@ impl BridgeCoordinator {
     }
 
     pub async fn handle_refund(&self, intent: &Intent) -> Result<()> {
-        info!("♻️ Refunding intent {} on {}", intent.id, intent.source_chain);
+        info!(
+            "♻️ Refunding intent {} on {}",
+            intent.id, intent.source_chain
+        );
 
         let result = match intent.source_chain.as_str() {
             "ethereum" | "11155111" => self.ethereum_relayer.refund_intent(&intent.id).await,
@@ -289,7 +355,8 @@ impl BridgeCoordinator {
             }
         }
 
-        self.database.update_intent_status(&intent.id, IntentStatus::Refunded)
+        self.database
+            .update_intent_status(&intent.id, IntentStatus::Refunded)
             .map_err(|e| anyhow!("Failed to update status: {}", e))?;
 
         let mut metrics = self.metrics.write().await;
@@ -309,7 +376,12 @@ impl BridgeCoordinator {
     }
 
     pub async fn get_operation_states(&self) -> Vec<IntentOperationState> {
-        self.operation_states.read().await.values().cloned().collect()
+        self.operation_states
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn is_token_supported(&self, token_address: &str, chain_id: u32) -> bool {
@@ -320,7 +392,8 @@ impl BridgeCoordinator {
                     5003 => token_type.get_mantle_address(),
                     _ => return false,
                 };
-                dest_address != "0x0000000000000000000000000000000000000000" || token_type == TokenType::ETH
+                dest_address != "0x0000000000000000000000000000000000000000"
+                    || token_type == TokenType::ETH
             })
             .unwrap_or(false)
     }

@@ -97,7 +97,7 @@ contract IntegrationTest is Test {
 
         // 3. RELAYER: Sync and register on destination
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, sourceProof, leafIndex);
@@ -113,7 +113,7 @@ contract IntegrationTest is Test {
         bytes32 destRoot = settlement.getMerkleRoot();
         
         vm.prank(relayer);
-        intentPool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        intentPool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
         // 6. RELAYER: Settle intent
         vm.prank(relayer); 
@@ -160,7 +160,7 @@ contract IntegrationTest is Test {
             bytes32 sourceRoot = intentPool.getMerkleRoot();
 
             vm.prank(relayer);
-            settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+            settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
             vm.prank(relayer);
             settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, proof, leafIndex);
@@ -189,7 +189,7 @@ contract IntegrationTest is Test {
 
         bytes32 destRoot = intentId;
         vm.prank(relayer);
-        intentPool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        intentPool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
         bytes32[] memory proof = new bytes32[](0);
 
@@ -237,7 +237,7 @@ contract IntegrationTest is Test {
         bytes32 sourceRoot = intentPool.getMerkleRoot();
 
         vm.prank(relayer);
-        settlement.syncSourceChainRoot(SOURCE_CHAIN, sourceRoot);
+        settlement.syncSourceChainCommitmentRoot(SOURCE_CHAIN, sourceRoot);
 
         vm.prank(relayer);
         settlement.registerIntent(intentId, commitment, address(token), TEST_AMOUNT, SOURCE_CHAIN, uint64(block.timestamp + 1 hours), sourceRoot, sourceProof, leafIndex);
@@ -251,7 +251,7 @@ contract IntegrationTest is Test {
         bytes32[] memory fillProof = settlement.generateFillProof(intentId);
         bytes32 destRoot = settlement.getMerkleRoot();
         vm.prank(relayer);
-        intentPool.syncDestChainRoot(DEST_CHAIN, destRoot);
+        intentPool.syncDestChainFillRoot(DEST_CHAIN, destRoot);
 
         gasStart = gasleft();
         vm.prank(relayer);

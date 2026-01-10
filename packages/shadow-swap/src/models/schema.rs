@@ -12,6 +12,7 @@ diesel::table! {
         transaction_hash -> Text,
         timestamp -> Timestamptz,
         created_at -> Timestamptz,
+        log_index -> Nullable<Int4>,
     }
 }
 

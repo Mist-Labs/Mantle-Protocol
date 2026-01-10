@@ -34,15 +34,6 @@ impl RootSyncCoordinator {
         }
     }
 
-    pub async fn sync_commitment_immediately(&self, source_chain: &str) -> Result<()> {
-        info!("🚀 Immediate commitment sync for {}", source_chain);
-        match source_chain {
-            "mantle" => self.sync_mantle_commitments_to_ethereum().await,
-            "ethereum" => self.sync_ethereum_commitments_to_mantle().await,
-            _ => Err(anyhow!("Unsupported source chain: {}", source_chain)),
-        }
-    }
-
     pub async fn sync_all_roots(&self) -> Result<()> {
         let results = tokio::join!(
             self.sync_ethereum_commitments_to_mantle(),
