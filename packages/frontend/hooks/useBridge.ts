@@ -45,6 +45,7 @@ import {
   parseTokenAmount,
   type ChainType,
 } from "@/lib/tokens";
+import { encryptPrivacyParams } from "@/lib/encryption";
 
 /**
  * Bridge parameters
@@ -177,7 +178,9 @@ export function useBridge() {
           throw new Error(`Settlement contract not configured for ${params.destChain}`);
         }
 
-        const domain = getEIP712Domain(destChainId, destContracts.settlement);
+        // Use SOURCE chain ID for EIP-712 domain since user is connected to source chain
+        // The signature will still be valid for claim authorization on destination chain
+        const domain = getEIP712Domain(sourceChainId, destContracts.settlement);
 
         const message: ClaimAuthMessage = {
           intentId: privacyParams.intentId,
@@ -258,7 +261,7 @@ export function useBridge() {
         // Wait for transaction confirmation
         await publicClient!.waitForTransactionReceipt({ hash: txHash });
 
-        // Step 5: Submit to backend
+        // Step 5: Encrypt privacy parameters and submit to backend
         updateState({ step: "submitting-backend" });
 
         // Get destination token address
@@ -266,6 +269,15 @@ export function useBridge() {
         if (!destTokenInfo) {
           throw new Error(`Token ${params.tokenSymbol} not supported on ${params.destChain}`);
         }
+
+        // CRITICAL: Encrypt secret and nullifier before sending to backend
+        // This ensures privacy parameters are never transmitted in plain text
+        const { encryptedSecret, encryptedNullifier } = await encryptPrivacyParams(
+          privacyParams.secret,
+          privacyParams.nullifier
+        );
+
+        console.log("Privacy parameters encrypted for transmission");
 
         const backendResponse = await initiateBridge({
           user_address: address,
@@ -275,8 +287,8 @@ export function useBridge() {
           dest_token: destTokenInfo.address,
           amount: amountWei.toString(),
           commitment: privacyParams.commitment,
-          secret: privacyParams.secret,
-          nullifier: privacyParams.nullifier,
+          secret: encryptedSecret, // Send encrypted secret
+          nullifier: encryptedNullifier, // Send encrypted nullifier
           claim_auth: claimAuth,
           recipient: params.recipient,
           refund_address: address,

@@ -147,8 +147,10 @@ export function isNativeToken(address: Hex): boolean {
 
 /**
  * Get list of supported token symbols
+ * Note: Native ETH temporarily disabled due to contract configuration
+ * Use WETH for Ethereum bridging
  */
-export const SUPPORTED_TOKENS = ["ETH", "USDC", "USDT", "WETH", "MNT"] as const;
+export const SUPPORTED_TOKENS = ["WETH", "USDC", "USDT", "MNT"] as const;
 
 export type SupportedToken = (typeof SUPPORTED_TOKENS)[number];
 

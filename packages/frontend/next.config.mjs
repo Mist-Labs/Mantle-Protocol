@@ -6,6 +6,9 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Turbopack configuration for Next.js 16+
+  // Empty config to silence webpack/turbopack migration warning
+  turbopack: {},
   // External packages that should not be bundled
   serverExternalPackages: [
     "pino",
@@ -20,7 +23,7 @@ const nextConfig = {
     "lokijs",
     "encoding",
   ],
-  // Webpack configuration (disable Turbopack to use webpack)
+  // Webpack configuration (fallback for when using --webpack flag)
   webpack: (config, { webpack, isServer }) => {
     if (!isServer) {
       // Client-side polyfills

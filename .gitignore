@@ -39,3 +39,6 @@ build/
 *.tsbuildinfo
 .vercel
 yarn.lock
+
+.claude
+*.pdf

@@ -12,16 +12,17 @@ import type { ChainType } from "./tokens";
  * Contract addresses for Ethereum Sepolia Testnet (Chain ID: 11155111)
  */
 export const ETHEREUM_CONTRACTS = {
-  intentPool: "0xEeE2406c7F8bBB6bFD28E6EAc1bB3eA23c4ed8DF" as Hex,
-  settlement: process.env.NEXT_PUBLIC_ETHEREUM_SETTLEMENT as Hex | undefined,
+  intentPool: "0xA019C4fFC50b58AF6221F9EB59126630E26f3326" as Hex,
+  settlement: "0x0d632dC7786CD01712ED3CF3c6fa7F9e9C67Fa49" as Hex,
 } as const;
 
 /**
  * Contract addresses for Mantle Sepolia Testnet (Chain ID: 5003)
  */
 export const MANTLE_CONTRACTS = {
-  intentPool: "0xdD6A1d4c2659A2d8B95BEAB203aFe0b197451ba6" as Hex,
-  settlement: process.env.NEXT_PUBLIC_MANTLE_SETTLEMENT as Hex | undefined,
+  intentPool: "0x3ecB330Aa3EaE12bbc26022dE9ee140C06e3da43" as Hex,
+  settlement: "0x67eEf23fc45e149E43944100be8658c55D48f1a1" as Hex,
+  poseidonHasher: "0x8EA86eD4317AF92f73E5700eB9b93A72dE62f3B1" as Hex,
 } as const;
 
 /**
