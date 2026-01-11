@@ -137,17 +137,14 @@ export default function BridgeProgress({
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-md border border-neutral-800 bg-neutral-900 text-white">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-bold">
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-hidden border border-neutral-800 bg-neutral-900 text-white">
+        <DialogHeader className="border-b border-neutral-800 pb-4">
+          <DialogTitle className="text-xl font-bold">
             {isComplete ? "Bridge Complete!" : isFailed ? "Bridge Failed" : "Processing Bridge..."}
           </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-6">
-          {/* Progress Bar */}
-          <div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+          {/* Progress Bar - moved to header */}
+          <div className="mt-3">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-800">
               <motion.div
                 className={`h-full ${
                   isFailed
@@ -159,73 +156,55 @@ export default function BridgeProgress({
                 transition={{ duration: 0.5 }}
               />
             </div>
-            <div className="mt-2 flex justify-between text-xs text-neutral-500">
+            <div className="mt-1.5 flex justify-between text-xs text-neutral-500">
               <span>
                 Step {Math.max(currentStepIndex + 1, 1)} of {DISPLAY_STEPS.length}
               </span>
               <span>{Math.round(progress)}%</span>
             </div>
           </div>
+        </DialogHeader>
 
-          {/* Transaction Details */}
-          <div className="space-y-3 rounded-lg border border-neutral-700 bg-neutral-800/50 p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-neutral-400">From</span>
-              <Badge variant="outline" className="border-neutral-700">
-                {fromNetwork}
-              </Badge>
+        {/* Scrollable content area */}
+        <div className="max-h-[calc(85vh-140px)] space-y-4 overflow-y-auto px-1 pb-4">
+          {/* Transaction Details - Simplified */}
+          <div className="grid grid-cols-3 gap-3 rounded-lg border border-neutral-700/50 bg-neutral-800/30 p-3">
+            <div className="text-center">
+              <div className="mb-1 text-xs text-neutral-500">From</div>
+              <div className="truncate text-sm font-medium text-white">{fromNetwork}</div>
             </div>
             <div className="flex items-center justify-center">
               <ArrowRight className="h-4 w-4 text-orange-500" />
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-neutral-400">To</span>
-              <Badge variant="outline" className="border-neutral-700">
-                {toNetwork}
-              </Badge>
+            <div className="text-center">
+              <div className="mb-1 text-xs text-neutral-500">To</div>
+              <div className="truncate text-sm font-medium text-white">{toNetwork}</div>
             </div>
-            <div className="flex items-center justify-between border-t border-neutral-700 pt-3">
-              <span className="text-sm text-neutral-400">Amount</span>
-              <span className="font-bold text-white">
+            <div className="col-span-3 border-t border-neutral-700/50 pt-2 text-center">
+              <div className="mb-1 text-xs text-neutral-500">Amount</div>
+              <div className="text-base font-bold text-white">
                 {amount} {token}
-              </span>
-            </div>
-            {status && (
-              <div className="flex items-center justify-between border-t border-neutral-700 pt-3">
-                <span className="text-sm text-neutral-400">Status</span>
-                <Badge
-                  variant="outline"
-                  className={`border-neutral-700 ${
-                    status === "completed"
-                      ? "bg-green-500/10 text-green-500"
-                      : status === "failed"
-                        ? "bg-red-500/10 text-red-500"
-                        : "bg-orange-500/10 text-orange-500"
-                  }`}
-                >
-                  {status}
-                </Badge>
               </div>
-            )}
+            </div>
           </div>
 
           {/* Error Message */}
           {error && (
             <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg border border-red-500/30 bg-red-500/10 p-4"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="rounded-lg border border-red-500/50 bg-red-500/10 p-4"
             >
-              <div className="mb-1 flex items-center gap-2 text-sm font-medium text-red-500">
-                <XCircle className="h-4 w-4" />
-                Error
+              <div className="mb-2 flex items-center gap-2 font-semibold text-red-400">
+                <XCircle className="h-5 w-5 flex-shrink-0" />
+                <span>Transaction Failed</span>
               </div>
-              <div className="text-xs text-neutral-300">{error}</div>
+              <p className="text-sm leading-relaxed text-neutral-300">{error}</p>
             </motion.div>
           )}
 
           {/* Steps */}
-          <div className="space-y-3">
+          <div className="space-y-2">
             {DISPLAY_STEPS.map((displayStep, index) => {
               const stepInfo = STEP_MAP[displayStep]
               const Icon = stepInfo.icon
@@ -236,87 +215,107 @@ export default function BridgeProgress({
               return (
                 <motion.div
                   key={displayStep}
-                  initial={{ opacity: 0, x: -20 }}
+                  initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                  className={`flex items-center gap-4 rounded-lg p-3 transition-all ${
+                  transition={{ delay: index * 0.05 }}
+                  className={`flex items-center gap-3 rounded-lg border p-3 transition-all ${
                     isActive
-                      ? "border border-orange-500/30 bg-orange-500/10"
+                      ? "border-orange-500/40 bg-orange-500/10"
                       : isCompleted
-                        ? "border border-green-500/30 bg-green-500/10"
-                        : "border border-neutral-700/30 bg-neutral-800/30"
+                        ? "border-green-500/40 bg-green-500/5"
+                        : "border-neutral-700/50 bg-neutral-800/20"
                   }`}
                 >
                   <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full ${
                       isActive ? "bg-orange-500/20" : isCompleted ? "bg-green-500/20" : "bg-neutral-700/20"
                     }`}
                   >
                     {isActive ? (
-                      <Loader2 className="h-5 w-5 animate-spin text-orange-500" />
+                      <Loader2 className="h-4.5 w-4.5 animate-spin text-orange-500" />
                     ) : isCompleted ? (
-                      <CheckCircle2 className="h-5 w-5 text-green-500" />
+                      <CheckCircle2 className="h-4.5 w-4.5 text-green-500" />
                     ) : (
-                      <Icon className="h-5 w-5 text-neutral-500" />
+                      <Icon className="h-4.5 w-4.5 text-neutral-500" />
                     )}
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <div
-                      className={`font-medium ${
-                        isActive ? "text-orange-500" : isCompleted ? "text-green-500" : "text-neutral-400"
+                      className={`text-sm font-semibold ${
+                        isActive ? "text-orange-400" : isCompleted ? "text-green-400" : "text-neutral-400"
                       }`}
                     >
                       {stepInfo.title}
                     </div>
-                    <div className="text-xs text-neutral-500">{stepInfo.description}</div>
+                    <div className="truncate text-xs text-neutral-500">{stepInfo.description}</div>
                   </div>
                 </motion.div>
               )
             })}
           </div>
 
-          {/* Transaction Hash */}
-          {txHash && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg border border-neutral-700 bg-neutral-800/50 p-3"
-            >
-              <div className="mb-1 text-xs text-neutral-400">Transaction Hash</div>
-              <div className="flex items-center gap-2">
-                <span className="flex-1 truncate font-mono text-sm text-white">{txHash}</span>
-                {explorerUrl && (
-                  <a
-                    href={explorerUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-orange-500 transition-colors hover:text-orange-400"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                )}
-              </div>
-            </motion.div>
+          {/* Transaction Hash & Intent ID */}
+          {(txHash || intentId) && (
+            <div className="space-y-2">
+              {txHash && (
+                <motion.div
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-lg border border-neutral-700/50 bg-neutral-800/30 p-3"
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-medium text-neutral-400">
+                      <Network className="h-3.5 w-3.5 text-orange-500" />
+                      Transaction Hash
+                    </div>
+                    {explorerUrl && (
+                      <a
+                        href={explorerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 rounded-md bg-orange-500/10 px-2 py-1 text-xs font-medium text-orange-500 transition-all hover:bg-orange-500/20"
+                      >
+                        View
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+                  <div className="truncate font-mono text-xs text-neutral-300">{txHash}</div>
+                </motion.div>
+              )}
+
+              {intentId && (
+                <motion.div
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-lg border border-neutral-700/50 bg-neutral-800/30 p-3"
+                >
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-400">
+                    <Shield className="h-3.5 w-3.5 text-orange-500" />
+                    Intent ID
+                  </div>
+                  <div className="truncate font-mono text-xs text-neutral-300">{intentId}</div>
+                </motion.div>
+              )}
+            </div>
           )}
 
-          {/* Intent ID */}
-          {intentId && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg border border-neutral-700 bg-neutral-800/50 p-3"
-            >
-              <div className="mb-1 text-xs text-neutral-400">Intent ID</div>
-              <div className="flex items-center gap-2">
-                <span className="flex-1 truncate font-mono text-sm text-white">{intentId}</span>
+          {/* Waiting Message / Actions */}
+          {!isComplete && !isFailed && (
+            <div className="rounded-lg border border-neutral-700/50 bg-neutral-800/20 p-4 text-center">
+              <div className="flex items-center justify-center gap-2 text-sm text-neutral-400">
+                <Clock className="h-4 w-4 animate-pulse text-orange-500" />
+                <span>Please wait... This usually takes 10-30 seconds</span>
               </div>
-            </motion.div>
+            </div>
           )}
+        </div>
 
-          {/* Actions */}
-          <div className="flex gap-3">
+        {/* Actions Footer - Fixed at bottom */}
+        {(isComplete || isFailed) && (
+          <div className="border-t border-neutral-800 pt-4">
             {isComplete ? (
-              <>
+              <div className="flex gap-3">
                 <Button className="flex-1 bg-orange-500 hover:bg-orange-600" onClick={onClose}>
                   Bridge Again
                 </Button>
@@ -329,8 +328,8 @@ export default function BridgeProgress({
                 >
                   View Activity
                 </Button>
-              </>
-            ) : isFailed ? (
+              </div>
+            ) : (
               <Button
                 variant="outline"
                 className="w-full border-neutral-700 bg-neutral-800 hover:bg-neutral-700"
@@ -338,13 +337,9 @@ export default function BridgeProgress({
               >
                 Close
               </Button>
-            ) : (
-              <div className="w-full text-center text-sm text-neutral-500">
-                Please wait... This usually takes 10-30 seconds
-              </div>
             )}
           </div>
-        </div>
+        )}
       </DialogContent>
     </Dialog>
   )
