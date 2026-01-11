@@ -320,19 +320,19 @@ impl IntentSettlementWorker {
     }
 
     async fn get_fill_proof(&self, intent_id: &str, dest_chain: u32) -> Result<(Vec<String>, u32)> {
-        match dest_chain {
-            ETHEREUM_CHAIN_ID => {
-                let proof = self.ethereum_relayer.get_fill_proof(intent_id).await?;
-                let index = self.ethereum_relayer.get_fill_index(intent_id).await?;
-                Ok((proof, index))
-            }
-            MANTLE_CHAIN_ID => {
-                let proof = self.mantle_relayer.get_fill_proof(intent_id).await?;
-                let index = self.mantle_relayer.get_fill_index(intent_id).await?;
-                Ok((proof, index))
-            }
-            _ => Err(anyhow!("Invalid destination chain")),
-        }
+        let chain_name = match dest_chain {
+            ETHEREUM_CHAIN_ID => "ethereum",
+            MANTLE_CHAIN_ID => "mantle",
+            _ => return Err(anyhow!("Invalid destination chain")),
+        };
+
+        let (proof, index, _root) = self
+            .coordinator
+            .merkle_tree_manager
+            .proof_generator
+            .generate_fill_proof(chain_name, intent_id, 100)?;
+
+        Ok((proof, index as u32))
     }
 
     fn get_standardized_db_root(&self, tree_name: &str) -> Result<String> {

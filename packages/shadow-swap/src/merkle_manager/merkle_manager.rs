@@ -19,7 +19,7 @@ pub struct MerkleTreeManager {
     database: Arc<Database>,
     tree_depth: usize,
     tree_locks: Arc<RwLock<()>>,
-    proof_generator: Arc<MerkleProofGenerator>,
+    pub proof_generator: Arc<MerkleProofGenerator>,
 }
 
 impl MerkleTreeManager {
