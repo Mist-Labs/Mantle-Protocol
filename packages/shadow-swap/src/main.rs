@@ -240,21 +240,29 @@ async fn main() -> Result<()> {
 
     info!("🌐 Starting HTTP server on {}:{}", host, port);
 
+    // let server = HttpServer::new(move || {
+    //     let cors = Cors::default()
+    //         .allowed_origin_fn(|origin, _req_head| {
+    //             let origin_str = origin.to_str().unwrap_or("");
+    //             origin_str == "https://shadow-swaps.vercel.app"
+    //                 || origin_str == &std::env::var("CORS_ORIGIN").unwrap_or_default()
+    //         })
+    //         .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    //         .allowed_headers(vec![
+    //             header::CONTENT_TYPE,
+    //             header::AUTHORIZATION,
+    //             header::ACCEPT,
+    //         ])
+    //         .max_age(3600);
+
+    //     App::new()
+    //         .wrap(cors)
+    //         .wrap(Logger::default())
+    //         .app_data(app_state.clone())
+    //         .configure(config::config_scope::configure)
+    // })
     let server = HttpServer::new(move || {
-        let cors = Cors::default()
-            .allowed_origin_fn(|origin, _req_head| {
-                let origin_str = origin.to_str().unwrap_or("");
-                origin_str == "https://shadow-swaps.vercel.app"
-                    || origin_str == "http://localhost:3000"
-                    || origin_str == &std::env::var("CORS_ORIGIN").unwrap_or_default()
-            })
-            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-            .allowed_headers(vec![
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-            ])
-            .max_age(3600);
+        let cors = Cors::permissive();
 
         App::new()
             .wrap(cors)
