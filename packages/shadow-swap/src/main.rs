@@ -246,6 +246,7 @@ async fn main() -> Result<()> {
                 &std::env::var("CORS_ORIGIN")
                     .unwrap_or_else(|_| "http://localhost:3000".to_string()),
             )
+            .allowed_origin("https://shadow-swaps.vercel.app")
             .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])
             .allowed_headers(vec![
                 header::CONTENT_TYPE,
