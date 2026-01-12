@@ -242,18 +242,18 @@ async fn main() -> Result<()> {
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()
-            .allowed_origin(
-                &std::env::var("CORS_ORIGIN")
-                    .unwrap_or_else(|_| "http://localhost:3000".to_string()),
-            )
-            .allowed_origin("https://shadow-swaps.vercel.app")
+            .allowed_origin_fn(|origin, _req_head| {
+                let origin_str = origin.to_str().unwrap_or("");
+                origin_str == "https://shadow-swaps.vercel.app"
+                    || origin_str == "http://localhost:3000"
+                    || origin_str == &std::env::var("CORS_ORIGIN").unwrap_or_default()
+            })
             .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
             .allowed_headers(vec![
                 header::CONTENT_TYPE,
                 header::AUTHORIZATION,
                 header::ACCEPT,
             ])
-            .supports_credentials()
             .max_age(3600);
 
         App::new()
