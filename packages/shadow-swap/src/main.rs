@@ -247,7 +247,7 @@ async fn main() -> Result<()> {
                     .unwrap_or_else(|_| "http://localhost:3000".to_string()),
             )
             .allowed_origin("https://shadow-swaps.vercel.app")
-            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])
+            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
             .allowed_headers(vec![
                 header::CONTENT_TYPE,
                 header::AUTHORIZATION,
@@ -257,10 +257,10 @@ async fn main() -> Result<()> {
             .max_age(3600);
 
         App::new()
-            .app_data(app_state.clone())
-            .configure(config::config_scope::configure)
             .wrap(cors)
             .wrap(Logger::default())
+            .app_data(app_state.clone())
+            .configure(config::config_scope::configure)
     })
     .bind((host.as_str(), port))
     .context("Failed to bind HTTP server")?
