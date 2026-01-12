@@ -1016,9 +1016,9 @@ impl CrossChainSolver {
 
     async fn estimate_fill_gas(&self, intent: &DetectedIntent) -> Result<U256> {
         let base_gas = if intent.token_type.is_native() {
-            U256::from(100_000)
+            U256::from(90_000)
         } else {
-            U256::from(150_000)
+            U256::from(120_000)
         };
 
         let gas_price = if intent.dest_chain == self.config.ethereum_chain_id as u32 {
