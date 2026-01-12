@@ -7,7 +7,7 @@ use crate::api::routes::{
 
 pub fn configure(conf: &mut web::ServiceConfig) {
     let scope = web::scope("/api/v1")
-        .service(initiate_bridge)
+        .service(web::resource("/bridge/initiate").route(web::post().to(initiate_bridge)))
         .service(get_intent_status)
         .service(list_intents)
         .service(indexer_event)
