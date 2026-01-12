@@ -53,7 +53,7 @@ impl PriceFeedManager {
         let client_clone = self.client.clone();
 
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(60));
+            let mut interval = time::interval(Duration::from_secs(120));
 
             loop {
                 interval.tick().await;

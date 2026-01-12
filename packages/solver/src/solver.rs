@@ -960,6 +960,11 @@ impl CrossChainSolver {
         let fee_amount = intent.amount * U256::from(settlement_fee_bps) / U256::from(10000);
         let gas_estimate = self.estimate_fill_gas(intent).await?;
 
+        info!(
+            "💰 Evaluating opportunity for intent: {:?}",
+            intent.intent_id
+        );
+
         let fee_value_usd = self
             .get_token_price_usd(intent.token_type, fee_amount)
             .await?;
@@ -983,12 +988,21 @@ impl CrossChainSolver {
             0
         };
 
-        debug!(
-            "💰 Intent: ${:.6} | Fee: ${:.6} | Gas: ${:.6} | Profit: ${:.6} ({} bps)",
-            intent_value_usd, fee_value_usd, gas_cost_usd, profit_usd, profit_bps
+        info!("📊 Opportunity Analysis | Intent: {:?}", intent.intent_id);
+        info!(
+            "   Intent Value: ${:.6} | Fee (2%): ${:.6}",
+            intent_value_usd, fee_value_usd
+        );
+        info!("   Gas Cost: ${:.6}", gas_cost_usd);
+        info!("   Net Profit: ${:.6} ({} bps)", profit_usd, profit_bps);
+        info!(
+            "   Token: {:?} | Amount: {}",
+            intent.token_type, intent.amount
         );
 
         let risk_score = self.calculate_risk_score(intent).await?;
+
+        info!("   Risk Score: {}/100", risk_score);
 
         Ok(FillOpportunity {
             intent: intent.clone(),
@@ -1048,23 +1062,38 @@ impl CrossChainSolver {
     }
 
     async fn should_fill(&self, opportunity: &FillOpportunity) -> Result<bool> {
+        // Check profit
         if opportunity.profit_bps < self.config.min_profit_bps {
-            debug!("❌ Insufficient profit: {} bps", opportunity.profit_bps);
+            warn!(
+                "❌ FILL REJECTED - Low profit: {} bps < {} bps required | Intent: {:?}",
+                opportunity.profit_bps, self.config.min_profit_bps, opportunity.intent.intent_id
+            );
             return Ok(false);
         }
 
+        // Check risk
         if opportunity.risk_score > 70 {
-            warn!("⚠️ High risk: {}", opportunity.risk_score);
+            warn!(
+                "❌ FILL REJECTED - High risk: {} > 70 | Intent: {:?}",
+                opportunity.risk_score, opportunity.intent.intent_id
+            );
             return Ok(false);
         }
 
+        // Check concurrent fills
         let metrics = self.metrics.read().await;
         if metrics.active_fills_count >= self.config.max_concurrent_fills {
-            debug!("❌ Max concurrent fills reached");
+            warn!(
+                "❌ FILL REJECTED - Max concurrent fills: {}/{} | Intent: {:?}",
+                metrics.active_fills_count,
+                self.config.max_concurrent_fills,
+                opportunity.intent.intent_id
+            );
             return Ok(false);
         }
         drop(metrics);
 
+        // Check max capital
         let max_capital = self
             .config
             .max_capital_per_fill
@@ -1072,10 +1101,17 @@ impl CrossChainSolver {
             .ok_or_else(|| anyhow!("Token not configured"))?;
 
         if opportunity.capital_required > *max_capital {
-            debug!("❌ Exceeds max capital per fill");
+            warn!(
+                "❌ FILL REJECTED - Exceeds max capital: {} > {} | Token: {:?} | Intent: {:?}",
+                opportunity.capital_required,
+                max_capital,
+                opportunity.intent.token_type,
+                opportunity.intent.intent_id
+            );
             return Ok(false);
         }
 
+        // Determine destination chain
         let dest_chain = if opportunity.intent.source_chain == self.config.ethereum_chain_id as u32
         {
             self.config.mantle_chain_id
@@ -1083,7 +1119,12 @@ impl CrossChainSolver {
             self.config.ethereum_chain_id
         };
 
-        info!("🔍 Fetching fresh balance for fill decision...");
+        info!(
+            "🔍 Checking balance for fill | Token: {:?} | Chain: {} | Intent: {:?}",
+            opportunity.intent.token_type, dest_chain, opportunity.intent.intent_id
+        );
+
+        // Fetch fresh balance
         let balance = self
             .fetch_balance_with_retry(opportunity.intent.token_type, dest_chain, 3)
             .await?;
@@ -1093,6 +1134,7 @@ impl CrossChainSolver {
             balances.insert((opportunity.intent.token_type, dest_chain), balance);
         }
 
+        // Calculate required amount with safety margin
         let safety_margin = U256::from(105);
         let required_with_margin = opportunity
             .capital_required
@@ -1102,12 +1144,17 @@ impl CrossChainSolver {
 
         if balance < required_with_margin {
             warn!(
-                "❌ Insufficient balance for {:?} on chain {}: has {} but needs {} (with 5% margin)",
-                opportunity.intent.token_type, dest_chain, balance, required_with_margin
+                "❌ FILL REJECTED - Insufficient balance | Token: {:?} | Chain: {} | Has: {} | Needs: {} (with 5% margin) | Intent: {:?}",
+                opportunity.intent.token_type,
+                dest_chain,
+                balance,
+                required_with_margin,
+                opportunity.intent.intent_id
             );
             return Ok(false);
         }
 
+        // Check locked capital
         let active_fills = self.active_fills.read().await;
         let locked_capital: U256 = active_fills
             .values()
@@ -1123,24 +1170,31 @@ impl CrossChainSolver {
 
         if available_balance < required_with_margin {
             warn!(
-                "❌ Insufficient available balance: total={}, locked={}, available={}, needed={}",
-                balance, locked_capital, available_balance, required_with_margin
+                "❌ FILL REJECTED - Capital locked | Token: {:?} | Chain: {} | Total: {} | Locked: {} | Available: {} | Needs: {} | Intent: {:?}",
+                opportunity.intent.token_type,
+                dest_chain,
+                balance,
+                locked_capital,
+                available_balance,
+                required_with_margin,
+                opportunity.intent.intent_id
             );
             return Ok(false);
         }
 
         info!(
-            "✅ Fill approved: profit={}bps, risk={}, balance={}, available={}, needed={}",
+            "✅ FILL APPROVED | Profit: {}bps | Risk: {} | Balance: {} | Available: {} | Needs: {} | Intent: {:?}",
             opportunity.profit_bps,
             opportunity.risk_score,
             balance,
             available_balance,
-            required_with_margin
+            required_with_margin,
+            opportunity.intent.intent_id
         );
 
         Ok(true)
     }
-
+    
     async fn verify_provider_health(&self, chain_id: u64) -> Result<()> {
         let provider = if chain_id == self.config.ethereum_chain_id {
             &self.ethereum_provider
@@ -1167,14 +1221,25 @@ impl CrossChainSolver {
         let token_decimals = token_type.decimals();
         let amount_decimal = amount.as_u128() as f64 / 10f64.powi(token_decimals as i32);
 
-        let price_per_token = self.price_feed.get_usd_price(token_type).await?;
+        let price_per_token = match self.price_feed.get_usd_price(token_type).await {
+            Ok(price) => price,
+            Err(e) => {
+                warn!(
+                    "⚠️ Failed to get USD price for {:?}: {}",
+                    token_type.symbol(),
+                    e
+                );
+                return Err(e);
+            }
+        };
 
         let value_usd = amount_decimal * price_per_token;
 
         debug!(
-            "💵 {} amount {} = ${:.6}",
-            token_type.symbol(),
+            "💵 Price lookup: {} {} (${:.4}/token) = ${:.6}",
             amount_decimal,
+            token_type.symbol(),
+            price_per_token,
             value_usd
         );
 
@@ -1184,11 +1249,20 @@ impl CrossChainSolver {
     async fn get_gas_cost_usd(&self, gas_amount_wei: U256) -> Result<f64> {
         let gas_amount_eth = gas_amount_wei.as_u128() as f64 / 10f64.powi(18);
 
-        let eth_price = self.price_feed.get_usd_price(SupportedToken::ETH).await?;
+        let eth_price = match self.price_feed.get_usd_price(SupportedToken::ETH).await {
+            Ok(price) => price,
+            Err(e) => {
+                warn!("⚠️ Failed to get ETH price for gas calculation: {}", e);
+                return Err(e);
+            }
+        };
 
         let value_usd = gas_amount_eth * eth_price;
 
-        debug!("💵 Gas {} ETH = ${:.6}", gas_amount_eth, value_usd);
+        debug!(
+            "⛽ Gas cost: {} ETH (${:.4}/ETH) = ${:.6}",
+            gas_amount_eth, eth_price, value_usd
+        );
 
         Ok(value_usd)
     }

@@ -26,7 +26,7 @@ use crate::{
 // BRIDGE OPERATIONS
 // ============================================================================
 // secret and nullifier should be encrypted on frontend before sending to backend
-#[post("/bridge/initiate")]
+// #[post("/bridge/initiate")]
 pub async fn initiate_bridge(
     req: HttpRequest,
     body: web::Bytes,
