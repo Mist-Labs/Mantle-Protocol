@@ -27,11 +27,9 @@ export default function Navigation() {
 
   const isActive = (href: string) => pathname === href
 
-  // Available networks
+  // Available networks (testnets only)
   const networks = [
-    { id: 5000, name: "Mantle Mainnet", value: "5000" },
     { id: 5003, name: "Mantle Sepolia", value: "5003" },
-    { id: 1, name: "Ethereum Mainnet", value: "1" },
     { id: 11155111, name: "Ethereum Sepolia", value: "11155111" },
   ]
 

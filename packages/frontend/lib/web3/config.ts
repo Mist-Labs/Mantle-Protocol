@@ -48,7 +48,8 @@ const metadata = {
   icons: ["/icon.svg"],
 }
 
-// Create QueryClient
+// Create QueryClient for Wagmi
+// Note: Query-specific config is handled per-query, not globally
 export const queryClient = new QueryClient()
 
 // Create Wagmi Adapter

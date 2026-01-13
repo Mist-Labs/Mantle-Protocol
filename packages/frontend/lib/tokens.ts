@@ -24,6 +24,14 @@ export interface TokenInfo {
 }
 
 /**
+ * Native ETH address constant
+ * Using 0x0000...0000 as per API documentation
+ * NOTE: Contract source shows 0xEeee...EEeE, but deployed contract may differ
+ * The API docs specify: ETH (Native) = 0x0000000000000000000000000000000000000000
+ */
+export const NATIVE_ETH_ADDRESS = "0x0000000000000000000000000000000000000000" as Hex;
+
+/**
  * Token addresses on Ethereum Sepolia Testnet (Chain ID: 11155111)
  */
 export const ETHEREUM_TOKENS: Record<string, TokenInfo> = {
@@ -31,8 +39,9 @@ export const ETHEREUM_TOKENS: Record<string, TokenInfo> = {
     symbol: "ETH",
     name: "Ethereum",
     decimals: 18,
-    address: "0x0000000000000000000000000000000000000000",
+    address: NATIVE_ETH_ADDRESS,
     isNative: true,
+    logo: "https://cryptologos.cc/logos/ethereum-eth-logo.svg",
   },
   USDC: {
     symbol: "USDC",
@@ -40,6 +49,7 @@ export const ETHEREUM_TOKENS: Record<string, TokenInfo> = {
     decimals: 6,
     address: "0x28650373758d75a8fF0B22587F111e47BAC34e21",
     isNative: false,
+    logo: "https://cryptologos.cc/logos/usd-coin-usdc-logo.svg",
   },
   USDT: {
     symbol: "USDT",
@@ -47,6 +57,7 @@ export const ETHEREUM_TOKENS: Record<string, TokenInfo> = {
     decimals: 6,
     address: "0x89F4f0e13997Ca27cEB963DEE291C607e4E59923",
     isNative: false,
+    logo: "https://cryptologos.cc/logos/tether-usdt-logo.svg",
   },
   WETH: {
     symbol: "WETH",
@@ -72,8 +83,9 @@ export const MANTLE_TOKENS: Record<string, TokenInfo> = {
     symbol: "ETH",
     name: "Ethereum",
     decimals: 18,
-    address: "0x0000000000000000000000000000000000000000",
+    address: NATIVE_ETH_ADDRESS,
     isNative: true,
+    logo: "https://cryptologos.cc/logos/ethereum-eth-logo.svg",
   },
   USDC: {
     symbol: "USDC",
@@ -81,6 +93,7 @@ export const MANTLE_TOKENS: Record<string, TokenInfo> = {
     decimals: 6,
     address: "0xA4b184006B59861f80521649b14E4E8A72499A23",
     isNative: false,
+    logo: "https://cryptologos.cc/logos/usd-coin-usdc-logo.svg",
   },
   USDT: {
     symbol: "USDT",
@@ -88,6 +101,7 @@ export const MANTLE_TOKENS: Record<string, TokenInfo> = {
     decimals: 6,
     address: "0xB0ee6EF7788E9122fc4AAE327Ed4FEf56c7da891",
     isNative: false,
+    logo: "https://cryptologos.cc/logos/tether-usdt-logo.svg",
   },
   WETH: {
     symbol: "WETH",
@@ -139,18 +153,16 @@ export function getTokenAddress(symbol: string, chain: ChainType): Hex {
  */
 export function isNativeToken(address: Hex): boolean {
   return (
-    address === "0x0000000000000000000000000000000000000000" ||
-    address.toLowerCase() ===
-      "0x0000000000000000000000000000000000000000".toLowerCase()
+    address.toLowerCase() === NATIVE_ETH_ADDRESS.toLowerCase()
   );
 }
 
 /**
  * Get list of supported token symbols
- * Note: Native ETH temporarily disabled due to contract configuration
- * Use WETH for Ethereum bridging
+ * Currently only USDC and USDT are supported (1:1 bridge)
+ * ETH, WETH, and MNT will be added in future updates
  */
-export const SUPPORTED_TOKENS = ["WETH", "USDC", "USDT", "MNT"] as const;
+export const SUPPORTED_TOKENS = ["USDC", "USDT"] as const;
 
 export type SupportedToken = (typeof SUPPORTED_TOKENS)[number];
 

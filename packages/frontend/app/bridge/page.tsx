@@ -4,6 +4,7 @@ import { motion } from "framer-motion"
 import Navigation from "@/components/shared/Navigation"
 import Footer from "@/components/shared/Footer"
 import BridgeForm from "@/components/bridge/BridgeForm"
+import RecentActivity from "@/components/bridge/RecentActivity"
 import { TrendingUp, Users, Zap, Shield } from "lucide-react"
 
 export default function BridgePage() {
@@ -57,6 +58,11 @@ export default function BridgePage() {
 
           {/* Bridge Form */}
           <BridgeForm />
+
+          {/* Recent Activity */}
+          <div className="mt-8">
+            <RecentActivity />
+          </div>
 
           {/* Info Cards */}
           <motion.div

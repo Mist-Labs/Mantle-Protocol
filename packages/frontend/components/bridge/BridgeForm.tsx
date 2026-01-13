@@ -1,11 +1,12 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { useAccount, useBalance, useChainId, useSwitchChain } from "wagmi"
 import { parseEther, formatEther } from "viem"
 import type { Address } from "viem"
 import { toast } from "sonner"
+import { useQueryClient } from "@tanstack/react-query"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,8 +16,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ArrowDownUp, ArrowRight, Shield, Clock, DollarSign, AlertCircle, CheckCircle2, Loader2 } from "lucide-react"
 import BridgeProgress from "./BridgeProgress"
 import { useBridge } from "@/hooks/useBridge"
-import { SUPPORTED_TOKENS } from "@/lib/tokens"
-import { useTokenUSDValue, useTokenConversion } from "@/hooks/usePriceFeed"
+import { useIntentStatus } from "@/hooks/useIntentStatus"
+import { SUPPORTED_TOKENS, getTokenInfo } from "@/lib/tokens"
+import { useTokenUSDValue } from "@/hooks/usePriceFeed"
 
 // Supported networks (testnets only for MVP)
 const NETWORKS = [
@@ -28,44 +30,87 @@ export default function BridgeForm() {
   const { address, isConnected } = useAccount()
   const chainId = useChainId()
   const { switchChain } = useSwitchChain()
+  const queryClient = useQueryClient()
 
-  // Bridge hook
-  const { bridge, reset, state, isLoading, step, intentId, txHash, status, error } = useBridge()
-
-  // Form state
+  // Form state (must be before hooks that use it)
   const [fromNetwork, setFromNetwork] = useState(NETWORKS[0])
   const [toNetwork, setToNetwork] = useState(NETWORKS[1])
-  const [selectedToken, setSelectedToken] = useState<string>("ETH")
+  const [selectedToken, setSelectedToken] = useState<string>("USDC")
   const [amount, setAmount] = useState("")
   const [destinationAddress, setDestinationAddress] = useState("")
   const [useConnectedWallet, setUseConnectedWallet] = useState(true)
   const [showProgress, setShowProgress] = useState(false)
+  const [modalClosing, setModalClosing] = useState(false)
+
+  // Bridge hook
+  const { bridge, reset, isLoading, step, intentId, txHash, status, error } = useBridge()
+
+  // Real-time intent status tracking (what Recent Activity uses!)
+  const { intentStatus } = useIntentStatus({
+    intentId: intentId as `0x${string}` | null,
+    enabled: !!intentId && showProgress && !modalClosing,
+    refetchInterval: 5000,
+  })
 
   // Price feed hooks
   const { usdValue, isLoading: isLoadingUSD, price } = useTokenUSDValue(selectedToken, amount)
-  const {
-    outputAmount,
-    rate,
-    isLoading: isLoadingConversion,
-  } = useTokenConversion(selectedToken, selectedToken, amount)
 
   // Show progress modal when bridge starts
   useEffect(() => {
-    if (isLoading && !showProgress) {
+    if (isLoading && !showProgress && !modalClosing) {
       setShowProgress(true)
+      setModalClosing(false)
     }
-  }, [isLoading, showProgress])
+  }, [isLoading, showProgress, modalClosing])
 
-  // Close progress modal when bridge completes or fails
+  // Auto-close modal when on-chain tx succeeds & refresh queries immediately
   useEffect(() => {
-    if (!isLoading && (step === "completed" || step === "failed") && showProgress) {
-      // Keep modal open to show final status
-      setTimeout(() => {
-        setShowProgress(false)
-        reset()
-      }, 5000) // Auto-close after 5 seconds
-    }
-  }, [isLoading, step, showProgress, reset])
+    if (!showProgress || modalClosing) return
+    if (step !== "waiting-solver") return
+
+    // Mark as closing to prevent re-execution
+    setModalClosing(true)
+
+    console.log("✅ On-chain transaction successful! Refreshing activity lists...")
+
+    // Immediately invalidate queries to refresh Recent Activity and Activity page
+    queryClient.invalidateQueries({ queryKey: ["bridgeIntents"] })
+    queryClient.invalidateQueries({ queryKey: ["intentStatus"] })
+
+    toast.success("Transaction submitted! Track progress in Recent Activity below.", {
+      duration: 4000,
+    })
+
+    // Close modal after delay
+    const timer = setTimeout(() => {
+      setShowProgress(false)
+      setModalClosing(false)
+    }, 2000)
+
+    return () => clearTimeout(timer)
+  }, [step, showProgress, modalClosing, queryClient])
+
+  // Handle errors
+  useEffect(() => {
+    if (!showProgress || modalClosing) return
+    if (step !== "failed" || !error) return
+
+    setModalClosing(true)
+
+    console.log("❌ Transaction failed:", error)
+
+    toast.error(error || "Transaction failed. Please try again.", {
+      duration: 5000,
+    })
+
+    const timer = setTimeout(() => {
+      setShowProgress(false)
+      setModalClosing(false)
+      reset()
+    }, 3000)
+
+    return () => clearTimeout(timer)
+  }, [step, showProgress, error, reset, modalClosing])
 
   // Get balance for current network
   const { data: balanceData } = useBalance({
@@ -78,7 +123,7 @@ export default function BridgeForm() {
     if (!amount || isNaN(Number(amount))) return { fee: "0", total: "0", receive: "0" }
 
     const amountNum = Number(amount)
-    const feePercent = 0.15 / 100 // 0.15%
+    const feePercent = 0.2 / 100 // 0.2% (20 basis points as per contract)
     const fee = amountNum * feePercent
     const receive = amountNum - fee
 
@@ -151,9 +196,8 @@ export default function BridgeForm() {
         recipient: destination as Address,
       })
 
-      toast.success("Bridge completed successfully!")
-
-      // Reset form
+      // Success toast is shown in useEffect when step becomes "completed"
+      // Reset form after successful bridge
       setAmount("")
       setDestinationAddress("")
     } catch (error: unknown) {
@@ -258,6 +302,64 @@ export default function BridgeForm() {
             </div>
           </div>
 
+          {/* Token Selection */}
+          <div className="mb-6">
+            <Label className="mb-2 text-neutral-300">Token</Label>
+            <Select value={selectedToken} onValueChange={setSelectedToken}>
+              <SelectTrigger className="h-16 border-neutral-700 bg-neutral-800 text-white">
+                <SelectValue>
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={getTokenInfo(selectedToken, fromNetwork.chain)?.logo || ""}
+                      alt={selectedToken}
+                      className="h-10 w-10 rounded-full"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none"
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement
+                        if (fallback) fallback.style.display = "flex"
+                      }}
+                    />
+                    <div className="hidden h-10 w-10 items-center justify-center rounded-full bg-orange-500/10">
+                      <span className="text-lg font-bold text-orange-500">{selectedToken}</span>
+                    </div>
+                    <div className="text-left">
+                      <div className="font-medium text-white">{selectedToken}</div>
+                      <div className="text-xs text-neutral-500">1:1 Bridge (Same token on both chains)</div>
+                    </div>
+                  </div>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {SUPPORTED_TOKENS.map((token) => {
+                  const tokenInfo = getTokenInfo(token, fromNetwork.chain)
+                  return (
+                    <SelectItem key={token} value={token}>
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={tokenInfo?.logo || ""}
+                          alt={token}
+                          className="h-10 w-10 rounded-full"
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none"
+                            const fallback = e.currentTarget.nextElementSibling as HTMLElement
+                            if (fallback) fallback.style.display = "flex"
+                          }}
+                        />
+                        <div className="hidden h-10 w-10 items-center justify-center rounded-full bg-orange-500/10">
+                          <span className="text-lg font-bold text-orange-500">{token}</span>
+                        </div>
+                        <div className="text-left">
+                          <div className="font-medium">{tokenInfo?.name || token}</div>
+                          <div className="text-xs text-neutral-500">{token}</div>
+                        </div>
+                      </div>
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* Amount Input */}
           <div className="mb-6">
             <div className="mb-2 flex items-center justify-between">
@@ -278,7 +380,7 @@ export default function BridgeForm() {
                 className="h-16 border-neutral-700 bg-neutral-800 pr-20 text-2xl font-bold text-white"
               />
               <div className="absolute right-4 top-1/2 -translate-y-1/2 transform text-neutral-500">
-                {fromNetwork.symbol}
+                {selectedToken}
               </div>
             </div>
             {amount && Number(amount) > 0 && (
@@ -336,7 +438,7 @@ export default function BridgeForm() {
                 <span className="text-neutral-400">You send</span>
                 <div className="text-right">
                   <div className="font-medium text-white">
-                    {amount} {fromNetwork.symbol}
+                    {amount} {selectedToken}
                   </div>
                   {usdValue && !isLoadingUSD && (
                     <div className="text-xs text-neutral-500">≈ ${usdValue.toFixed(2)}</div>
@@ -346,10 +448,10 @@ export default function BridgeForm() {
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-1 text-neutral-400">
                   <DollarSign className="h-3 w-3" />
-                  Fee (0.15%)
+                  Fee (0.2%)
                 </span>
                 <span className="text-neutral-300">
-                  {fees.fee} {fromNetwork.symbol}
+                  {fees.fee} {selectedToken}
                 </span>
               </div>
               <div className="flex items-center justify-between border-t border-neutral-700 pt-3">
@@ -359,14 +461,8 @@ export default function BridgeForm() {
                 </span>
                 <div className="text-right">
                   <div className="text-lg font-bold text-white">
-                    {fees.receive} {toNetwork.symbol}
+                    {fees.receive} {selectedToken}
                   </div>
-                  {isLoadingConversion && (
-                    <div className="flex items-center justify-end gap-1 text-xs text-neutral-500">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      <span>Calculating...</span>
-                    </div>
-                  )}
                 </div>
               </div>
               {price && !isLoadingUSD && (
@@ -394,21 +490,20 @@ export default function BridgeForm() {
           {/* Bridge Button */}
           <Button
             onClick={handleBridge}
-            disabled={!isConnected || !amount || Number(amount) <= 0 || isLoading}
+            disabled={!isConnected || !amount || Number(amount) <= 0 || (isLoading && step !== "waiting-solver")}
             className="h-12 w-full bg-orange-500 text-lg font-semibold text-white shadow-lg shadow-orange-500/20 transition-all duration-300 hover:scale-105 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
           >
             {!isConnected ? (
               "Connect Wallet"
             ) : chainId !== fromNetwork.id ? (
               `Switch to ${fromNetwork.name}`
-            ) : isLoading ? (
+            ) : (isLoading && step !== "waiting-solver") ? (
               <>
                 {step === "generating-params" && "Generating privacy params..."}
                 {step === "signing-auth" && "Sign authorization..."}
                 {step === "approving-token" && "Approving token..."}
                 {step === "creating-intent" && "Creating intent..."}
                 {step === "submitting-backend" && "Submitting to backend..."}
-                {step === "waiting-solver" && "Waiting for solver..."}
               </>
             ) : (
               <>
@@ -431,10 +526,11 @@ export default function BridgeForm() {
 
       {/* Progress Modal */}
       <AnimatePresence>
-        {showProgress && (
+        {showProgress && !modalClosing && (
           <BridgeProgress
             onClose={() => {
               setShowProgress(false)
+              setModalClosing(false)
               reset()
             }}
             fromNetwork={fromNetwork.name}
@@ -444,7 +540,7 @@ export default function BridgeForm() {
             step={step}
             intentId={intentId || undefined}
             txHash={txHash || undefined}
-            status={status || undefined}
+            status={intentStatus || status || undefined}
             error={error || undefined}
           />
         )}

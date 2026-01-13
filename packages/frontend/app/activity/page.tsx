@@ -8,6 +8,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  useReactTable,
+  getCoreRowModel,
+  getPaginationRowModel,
+  flexRender,
+  type ColumnDef,
+} from "@tanstack/react-table"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   Search,
@@ -22,6 +29,7 @@ import {
   Loader2,
   RefreshCw,
   AlertCircle,
+  Wifi,
 } from "lucide-react"
 import { useBridgeIntents, formatTimeAgo, formatChainName, formatAmount } from "@/hooks/useBridgeIntents"
 import type { IntentStatusResponse, IntentStatus } from "@/lib/api"
@@ -42,12 +50,181 @@ export default function ActivityPage() {
     status: filterStatus,
     chain: filterChain,
     limit: 50,
+    // Don't pass userAddress - show ALL transactions like Recent Activity
   })
+
+  // Client-side filtering for search queries
+  const filteredTransactions = useMemo(() => {
+    return intents.filter((intent) => {
+      const matchesSearch =
+        searchQuery === "" ||
+        (intent.intent_id && intent.intent_id.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        intent.source_chain.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        intent.dest_chain.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        intent.source_token.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (intent.commitment && intent.commitment.toLowerCase().includes(searchQuery.toLowerCase()))
+
+      return matchesSearch
+    })
+  }, [intents, searchQuery])
+
+  // Table columns configuration
+  const columns = useMemo<ColumnDef<IntentStatusResponse>[]>(() => [
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          {getStatusIcon(row.original.status)}
+          {getStatusBadge(row.original.status)}
+        </div>
+      ),
+    },
+    {
+      accessorKey: "created_at",
+      header: "Time",
+      cell: ({ row }) => <span className="text-neutral-300">{formatTimeAgo(row.original.created_at)}</span>,
+    },
+    {
+      id: "route",
+      header: "Route",
+      cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <span className="text-neutral-300">{formatChainName(row.original.source_chain)}</span>
+          <ArrowRight className="h-3 w-3 text-orange-500" />
+          <span className="text-neutral-300">{formatChainName(row.original.dest_chain)}</span>
+        </div>
+      ),
+    },
+    {
+      accessorKey: "amount",
+      header: "Amount",
+      cell: ({ row }) => (
+        <div>
+          <div className="font-medium text-white">
+            {formatAmount(row.original.amount)} {getTokenSymbol(row.original.source_token)}
+          </div>
+          {row.original.has_privacy && (
+            <div className="text-xs text-purple-400">🔒 Private</div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: "fee",
+      header: "Fee",
+      cell: () => <span className="text-neutral-300">~0.2%</span>,
+    },
+    {
+      accessorKey: "intent_id",
+      header: "Intent ID",
+      cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-sm text-neutral-300">
+            {row.original.intent_id ? `${row.original.intent_id.slice(0, 6)}...${row.original.intent_id.slice(-4)}` : "N/A"}
+          </span>
+          {row.original.intent_id && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                copyToClipboard(row.original.intent_id, row.original.intent_id)
+              }}
+              className="text-neutral-500 transition-colors hover:text-orange-500"
+            >
+              {copiedField === row.original.intent_id ? (
+                <Check className="h-4 w-4 text-green-500" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+            </button>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: "actions",
+      header: () => <div className="text-right">Actions</div>,
+      cell: ({ row }) => (
+        <div className="text-right">
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-neutral-700 bg-neutral-800 hover:border-orange-500/50 hover:bg-neutral-700"
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelectedTx(row.original)
+            }}
+          >
+            View Details
+          </Button>
+        </div>
+      ),
+    },
+  ], [copiedField])
+
+  const table = useReactTable({
+    data: filteredTransactions,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: {
+      pagination: {
+        pageSize: 10,
+      },
+    },
+  })
+
+
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text)
     setCopiedField(field)
     setTimeout(() => setCopiedField(null), 2000)
+  }
+
+  // Helper to extract token symbol from address or return as-is if already a symbol
+  const getTokenSymbol = (token: string) => {
+    // If it starts with 0x, it's an address - try to determine symbol
+    if (token.startsWith("0x")) {
+      const lowerToken = token.toLowerCase();
+
+      // USDC addresses (Ethereum Sepolia & Mantle Sepolia)
+      if (lowerToken === "0x28650373758d75a8ff0b22587f111e47bac34e21" ||
+        lowerToken === "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238" ||
+        lowerToken === "0xa4b184006b59861f80521649b14e4e8a72499a23") {
+        return "USDC"
+      }
+
+      // USDT addresses (Ethereum Sepolia & Mantle Sepolia)
+      if (lowerToken === "0x89f4f0e13997ca27ceb963dee291c607e4e59923" ||
+        lowerToken === "0xb0ee6ef7788e9122fc4aae327ed4fef56c7da891" ||
+        lowerToken === "0x3e77a87143e8d1da601094d9d83006a982b194d3" ||
+        lowerToken === "0xf417f5a458ec102b90352f697d6e2ac3a3d2851f") {
+        return "USDT"
+      }
+
+      // WETH addresses
+      if (lowerToken === "0x50e8da97beeb8064714de45ce1f250879f3bd5b5" ||
+        lowerToken === "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111") {
+        return "WETH"
+      }
+
+      // MNT addresses
+      if (lowerToken === "0x65e37b558f64e2be5768db46df22f93d85741a9e" ||
+        lowerToken === "0x44fce297e4d6c5a50d28fb26a58202e4d49a13e7") {
+        return "MNT"
+      }
+
+      // ETH (native)
+      if (lowerToken === "0x0000000000000000000000000000000000000000") {
+        return "ETH"
+      }
+
+      // Unknown token, show truncated address
+      return `${token.slice(0, 6)}...${token.slice(-4)}`
+    }
+    // Already a symbol
+    return token
   }
 
   const getStatusIcon = (status: string) => {
@@ -85,20 +262,7 @@ export default function ActivityPage() {
     )
   }
 
-  // Client-side filtering for search queries
-  const filteredTransactions = useMemo(() => {
-    return intents.filter((intent) => {
-      const matchesSearch =
-        searchQuery === "" ||
-        intent.intent_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        intent.source_chain.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        intent.dest_chain.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        intent.source_token.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        intent.commitment.toLowerCase().includes(searchQuery.toLowerCase())
 
-      return matchesSearch
-    })
-  }, [intents, searchQuery])
 
   return (
     <div className="min-h-screen bg-black">
@@ -108,20 +272,29 @@ export default function ActivityPage() {
       <main className="px-4 pb-12 pt-24 sm:px-6">
         <div className="mx-auto max-w-7xl">
           {/* Header */}
-          <div className="mb-8 flex items-center justify-between">
-            <div>
-              <h1 className="mb-2 text-3xl font-bold text-white sm:text-4xl">Transaction Activity</h1>
-              <p className="text-neutral-400">View and track your cross-chain bridge transactions</p>
+          <div className="mb-8">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h1 className="mb-2 text-3xl font-bold text-white sm:text-4xl">Transaction Activity</h1>
+                <div className="flex items-center gap-3">
+                  <p className="text-neutral-400">View and track your cross-chain bridge transactions</p>
+                  <div className="flex items-center gap-1.5 text-xs text-green-500">
+                    <Wifi className="h-3 w-3" />
+                    <span>Live</span>
+                  </div>
+                </div>
+              </div>
+              <Button
+                onClick={() => refetch()}
+                disabled={isLoading}
+                variant="outline"
+                className="border-neutral-700 bg-neutral-800 hover:bg-neutral-700"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
             </div>
-            <Button
-              onClick={refetch}
-              disabled={isLoading}
-              variant="outline"
-              className="border-neutral-700 bg-neutral-800 hover:bg-neutral-700"
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
+
           </div>
 
           {/* Error State */}
@@ -186,101 +359,50 @@ export default function ActivityPage() {
             </div>
           </div>
 
-          {/* Transactions Table */}
           <div className="overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900">
             <Table>
               <TableHeader>
-                <TableRow className="border-neutral-800 hover:bg-neutral-800/50">
-                  <TableHead className="text-neutral-400">Status</TableHead>
-                  <TableHead className="text-neutral-400">Time</TableHead>
-                  <TableHead className="text-neutral-400">Route</TableHead>
-                  <TableHead className="text-neutral-400">Amount</TableHead>
-                  <TableHead className="text-neutral-400">Fee</TableHead>
-                  <TableHead className="text-neutral-400">Hash</TableHead>
-                  <TableHead className="text-right text-neutral-400">Actions</TableHead>
-                </TableRow>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id} className="border-neutral-800 hover:bg-neutral-800/50">
+                    {headerGroup.headers.map((header) => (
+                      <TableHead key={header.id} className="text-neutral-400">
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(header.column.columnDef.header, header.getContext())}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-12 text-center">
+                    <TableCell colSpan={columns.length} className="py-12 text-center">
                       <div className="flex items-center justify-center gap-2 text-neutral-500">
                         <Loader2 className="h-5 w-5 animate-spin" />
                         <span>Loading transactions...</span>
                       </div>
                     </TableCell>
                   </TableRow>
-                ) : filteredTransactions.length === 0 ? (
+                ) : table.getRowModel().rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-12 text-center text-neutral-500">
+                    <TableCell colSpan={columns.length} className="py-12 text-center text-neutral-500">
                       No transactions found
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredTransactions.map((intent) => (
+                  table.getRowModel().rows.map((row) => (
                     <TableRow
-                      key={intent.intent_id}
+                      key={row.id}
+                      data-state={row.getIsSelected() && "selected"}
                       className="cursor-pointer border-neutral-800 hover:bg-neutral-800/30"
-                      onClick={() => setSelectedTx(intent)}
+                      onClick={() => setSelectedTx(row.original)}
                     >
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {getStatusIcon(intent.status)}
-                          {getStatusBadge(intent.status)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-neutral-300">{formatTimeAgo(intent.created_at)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="text-neutral-300">{formatChainName(intent.source_chain)}</span>
-                          <ArrowRight className="h-3 w-3 text-orange-500" />
-                          <span className="text-neutral-300">{formatChainName(intent.dest_chain)}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div>
-                          <div className="font-medium text-white">
-                            {formatAmount(intent.amount)} {intent.source_token}
-                          </div>
-                          {intent.has_privacy && (
-                            <div className="text-xs text-purple-400">🔒 Private</div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-neutral-300">~0.15%</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm text-neutral-300">
-                            {intent.intent_id.slice(0, 6)}...{intent.intent_id.slice(-4)}
-                          </span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              copyToClipboard(intent.intent_id, intent.intent_id)
-                            }}
-                            className="text-neutral-500 transition-colors hover:text-orange-500"
-                          >
-                            {copiedField === intent.intent_id ? (
-                              <Check className="h-4 w-4 text-green-500" />
-                            ) : (
-                              <Copy className="h-4 w-4" />
-                            )}
-                          </button>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="border-neutral-700 bg-neutral-800 hover:border-orange-500/50 hover:bg-neutral-700"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setSelectedTx(intent)
-                          }}
-                        >
-                          View Details
-                        </Button>
-                      </TableCell>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
                     </TableRow>
                   ))
                 )}
@@ -291,18 +413,31 @@ export default function ActivityPage() {
           {/* Pagination */}
           <div className="mt-6 flex items-center justify-between">
             <p className="text-sm text-neutral-500">
-              Showing {filteredTransactions.length} of {count} transactions
+              Showing {table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1}-
+              {Math.min(
+                (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
+                table.getFilteredRowModel().rows.length
+              )}{" "}
+              of {table.getFilteredRowModel().rows.length} transactions
             </p>
-            {count > 50 && (
-              <div className="flex gap-2">
-                <Button variant="outline" className="border-neutral-700 bg-neutral-900 hover:bg-neutral-800" disabled>
-                  Previous
-                </Button>
-                <Button variant="outline" className="border-neutral-700 bg-neutral-900 hover:bg-neutral-800" disabled>
-                  Next
-                </Button>
-              </div>
-            )}
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="border-neutral-700 bg-neutral-900 hover:bg-neutral-800"
+                onClick={() => table.previousPage()}
+                disabled={!table.getCanPreviousPage()}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                className="border-neutral-700 bg-neutral-900 hover:bg-neutral-800"
+                onClick={() => table.nextPage()}
+                disabled={!table.getCanNextPage()}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         </div>
       </main>
@@ -347,9 +482,9 @@ export default function ActivityPage() {
                 <span className="text-neutral-400">Amount</span>
                 <div className="text-right">
                   <div className="font-medium text-white">
-                    {formatAmount(selectedTx.amount)} {selectedTx.source_token}
+                    {formatAmount(selectedTx.amount)} {getTokenSymbol(selectedTx.source_token)}
                   </div>
-                  <div className="text-sm text-neutral-500">→ {selectedTx.dest_token}</div>
+                  <div className="text-sm text-neutral-500">→ {getTokenSymbol(selectedTx.dest_token)}</div>
                 </div>
               </div>
 
@@ -432,11 +567,10 @@ export default function ActivityPage() {
                       )}
                     </button>
                     <a
-                      href={`${
-                        selectedTx.dest_chain === "ethereum"
-                          ? process.env.NEXT_PUBLIC_ETHEREUM_EXPLORER
-                          : process.env.NEXT_PUBLIC_MANTLE_EXPLORER
-                      }/tx/${selectedTx.dest_fill_txid}`}
+                      href={`${selectedTx.dest_chain === "ethereum"
+                        ? process.env.NEXT_PUBLIC_ETHEREUM_EXPLORER
+                        : process.env.NEXT_PUBLIC_MANTLE_EXPLORER
+                        }/tx/${selectedTx.dest_fill_txid}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-neutral-500 transition-colors hover:text-orange-500"
@@ -465,11 +599,10 @@ export default function ActivityPage() {
                       )}
                     </button>
                     <a
-                      href={`${
-                        selectedTx.source_chain === "ethereum"
-                          ? process.env.NEXT_PUBLIC_ETHEREUM_EXPLORER
-                          : process.env.NEXT_PUBLIC_MANTLE_EXPLORER
-                      }/tx/${selectedTx.source_complete_txid}`}
+                      href={`${selectedTx.source_chain === "ethereum"
+                        ? process.env.NEXT_PUBLIC_ETHEREUM_EXPLORER
+                        : process.env.NEXT_PUBLIC_MANTLE_EXPLORER
+                        }/tx/${selectedTx.source_complete_txid}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-neutral-500 transition-colors hover:text-orange-500"

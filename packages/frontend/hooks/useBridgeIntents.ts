@@ -1,22 +1,14 @@
 /**
  * useBridgeIntents Hook
  *
- * Hook for fetching and managing bridge intent transaction history
+ * Hook for fetching and managing bridge intent transaction history with real-time updates
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { listBridgeIntents, type IntentStatusResponse, type IntentStatus } from "@/lib/api";
 import type { ChainType } from "@/lib/tokens";
-
-/**
- * Bridge intents state
- */
-interface BridgeIntentsState {
-  intents: IntentStatusResponse[];
-  count: number;
-  isLoading: boolean;
-  error: string | null;
-}
+import { useIntentPoolWatch } from "./useIntentPoolWatch";
 
 /**
  * Filter options for bridge intents
@@ -25,50 +17,87 @@ interface BridgeIntentsFilters {
   status?: IntentStatus;
   chain?: ChainType;
   limit?: number;
+  userAddress?: string;
 }
 
 /**
- * Hook for fetching bridge intents with filtering
+ * Hook for fetching bridge intents with filtering and real-time updates
  */
 export function useBridgeIntents(filters?: BridgeIntentsFilters) {
-  const [state, setState] = useState<BridgeIntentsState>({
-    intents: [],
-    count: 0,
-    isLoading: true,
-    error: null,
+  // Watch Intent Pool contract events for real-time updates
+  useIntentPoolWatch();
+
+  // Query for backend intents (no local storage, backend only)
+  const {
+    data: backendData,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    // Fetch ALL intents by removing status/chain filters from query key
+    // This bypasses the backend API casing mismatch issue
+    queryKey: ["bridgeIntents", "all", "all", filters?.limit, filters?.userAddress],
+    queryFn: async () => {
+      // Pass minimal filters to backend to get everything, then filter client-side
+      return await listBridgeIntents({
+        // Only pass limit and userAddress if needed
+        limit: filters?.limit,
+        userAddress: filters?.userAddress,
+        // Explicitly undefined status/chain to fetch all
+        status: undefined,
+        chain: undefined
+      });
+    },
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return 10000; // Poll every 10 seconds if no data
+
+      // Check if there are pending transactions
+      const hasPending = data.data.some((intent) => {
+        const terminalStates = ["completed", "refunded", "failed"];
+        return !terminalStates.includes(intent.status);
+      });
+
+      // Poll every 5 seconds if pending transactions exist, otherwise every 30 seconds
+      return hasPending ? 5000 : 30000;
+    },
+    staleTime: 0,
   });
 
-  const fetchIntents = useCallback(async () => {
-    try {
-      setState((prev) => ({ ...prev, isLoading: true, error: null }));
+  // Use only backend data (no local storage)
+  const filteredIntents = useMemo(() => {
+    const backend = backendData?.data || [];
 
-      const response = await listBridgeIntents(filters);
+    // Apply client-side filters
+    let filtered = backend;
 
-      setState({
-        intents: response.data,
-        count: response.count,
-        isLoading: false,
-        error: null,
-      });
-    } catch (error) {
-      console.error("Failed to fetch bridge intents:", error);
-      setState({
-        intents: [],
-        count: 0,
-        isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to fetch intents",
-      });
+    // Apply client-side status filter
+    if (filters?.status) {
+      filtered = filtered.filter(intent => intent.status === filters.status);
     }
-  }, [filters?.status, filters?.chain, filters?.limit]);
 
-  // Initial fetch
-  useEffect(() => {
-    fetchIntents();
-  }, [fetchIntents]);
+    // Apply client-side chain filter
+    if (filters?.chain) {
+      filtered = filtered.filter(intent =>
+        intent.source_chain.toLowerCase().includes(filters.chain!) ||
+        intent.dest_chain.toLowerCase().includes(filters.chain!)
+      );
+    }
+
+    // Apply limit if specified
+    if (filters?.limit && filtered.length > filters.limit) {
+      filtered = filtered.slice(0, filters.limit);
+    }
+
+    return filtered;
+  }, [backendData, filters?.status, filters?.chain, filters?.limit]);
 
   return {
-    ...state,
-    refetch: fetchIntents,
+    intents: filteredIntents,
+    count: backendData?.count || filteredIntents.length,
+    isLoading,
+    error: error instanceof Error ? error.message : null,
+    refetch,
   };
 }
 
@@ -90,37 +119,62 @@ export function formatTimeAgo(dateString: string): string {
 
 /**
  * Format chain name for display
+ * Handles chain IDs, names, and various formats
  */
 export function formatChainName(chain: string): string {
-  switch (chain.toLowerCase()) {
-    case "ethereum":
-      return "Ethereum Sepolia";
-    case "mantle":
-      return "Mantle Sepolia";
-    default:
-      return chain;
+  const normalized = chain.toString().toLowerCase();
+
+  // Handle chain IDs
+  if (normalized === "11155111" || normalized === "sepolia") {
+    return "Ethereum Sepolia";
   }
+  if (normalized === "5003") {
+    return "Mantle Sepolia";
+  }
+  if (normalized === "1" || normalized === "mainnet") {
+    return "Ethereum";
+  }
+  if (normalized === "5000") {
+    return "Mantle";
+  }
+
+  // Handle string names
+  if (normalized.includes("ethereum")) {
+    return normalized.includes("sepolia") ? "Ethereum Sepolia" : "Ethereum";
+  }
+  if (normalized.includes("mantle")) {
+    return normalized.includes("sepolia") ? "Mantle Sepolia" : "Mantle";
+  }
+
+  // Return as-is if unknown
+  return chain;
 }
 
 /**
  * Format token amount for display
+ * Defaults to 6 decimals for USDC/USDT
  */
-export function formatAmount(amount: string, decimals: number = 18): string {
-  const value = BigInt(amount);
-  const divisor = BigInt(10 ** decimals);
-  const quotient = value / divisor;
-  const remainder = value % divisor;
+export function formatAmount(amount: string, decimals: number = 6): string {
+  try {
+    const value = BigInt(amount);
+    const divisor = BigInt(10 ** decimals);
+    const quotient = value / divisor;
+    const remainder = value % divisor;
 
-  if (remainder === BigInt(0)) {
-    return quotient.toString();
+    if (remainder === BigInt(0)) {
+      return quotient.toString();
+    }
+
+    const remainderStr = remainder.toString().padStart(decimals, "0");
+    const trimmedRemainder = remainderStr.slice(0, Math.min(6, decimals)).replace(/0+$/, "");
+
+    if (trimmedRemainder === "") {
+      return quotient.toString();
+    }
+
+    return `${quotient}.${trimmedRemainder}`;
+  } catch (error) {
+    console.error("Error formatting amount:", error);
+    return amount;
   }
-
-  const remainderStr = remainder.toString().padStart(decimals, "0");
-  const trimmedRemainder = remainderStr.slice(0, 6).replace(/0+$/, "");
-
-  if (trimmedRemainder === "") {
-    return quotient.toString();
-  }
-
-  return `${quotient}.${trimmedRemainder}`;
 }
