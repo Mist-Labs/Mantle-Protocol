@@ -6,9 +6,17 @@
  * - Bridge intent initiation
  * - Intent status polling
  * - Price feed queries
+ * - Automatic retry on network failures
  */
 
 import type { ChainType } from "./tokens";
+import { retryAPICall } from "./retry";
+import {
+  APIError,
+  HMACAuthError,
+  IntentNotFoundError,
+  NetworkTimeoutError,
+} from "./errors";
 
 /**
  * API Configuration
@@ -32,8 +40,10 @@ export type IntentStatus =
 
 /**
  * Bridge intent initiation request
+ * Updated to match API v1.0.0 specification
  */
 export interface BridgeInitiateRequest {
+  intent_id: string;
   user_address: string;
   source_chain: ChainType;
   dest_chain: ChainType;
@@ -41,8 +51,8 @@ export interface BridgeInitiateRequest {
   dest_token: string;
   amount: string;
   commitment: string;
-  secret: string;
-  nullifier: string;
+  encrypted_secret: string; // ECIES encrypted secret
+  encrypted_nullifier: string; // ECIES encrypted nullifier
   claim_auth: string;
   recipient: string;
   refund_address: string;
@@ -60,7 +70,32 @@ export interface BridgeInitiateResponse {
 }
 
 /**
- * Intent status response
+ * Backend raw response format (what API actually returns)
+ */
+interface BackendIntentResponse {
+  id: string; // Backend uses "id" not "intent_id"
+  status: string; // "Committed", "Filled", etc. (capitalized)
+  source_chain: string;
+  dest_chain: string;
+  source_token: string;
+  dest_token: string;
+  amount: string;
+  source_commitment: string; // Backend uses "source_commitment"
+  dest_fill_txid: string | null;
+  source_complete_txid: string | null;
+  dest_registration_txid?: string | null;
+  deadline: number;
+  created_at: string;
+  updated_at: string;
+  user_address: string;
+  refund_address: string;
+  solver_address?: string | null;
+  block_number?: number;
+  log_index?: number;
+}
+
+/**
+ * Normalized intent status response (what frontend uses)
  */
 export interface IntentStatusResponse {
   intent_id: string;
@@ -77,6 +112,44 @@ export interface IntentStatusResponse {
   created_at: string;
   updated_at: string;
   has_privacy: boolean;
+  user_address?: string; // For client-side filtering
+}
+
+/**
+ * Normalize backend response to frontend format
+ * Handles field name differences between backend and frontend
+ */
+function normalizeIntentResponse(
+  backend: BackendIntentResponse
+): IntentStatusResponse {
+  // Map backend status names to frontend status names
+  const statusMap: Record<string, IntentStatus> = {
+    Committed: "committed",
+    Registered: "committed",
+    Filled: "filled",
+    SolverPaid: "completed",
+    UserClaimed: "completed",
+    Refunded: "refunded",
+    Failed: "failed",
+  };
+
+  return {
+    intent_id: backend.id, // Map "id" to "intent_id"
+    status: statusMap[backend.status] || "created",
+    source_chain: backend.source_chain,
+    dest_chain: backend.dest_chain,
+    source_token: backend.source_token,
+    dest_token: backend.dest_token,
+    amount: backend.amount,
+    commitment: backend.source_commitment, // Map "source_commitment" to "commitment"
+    dest_fill_txid: backend.dest_fill_txid,
+    source_complete_txid: backend.source_complete_txid,
+    deadline: backend.deadline,
+    created_at: backend.created_at,
+    updated_at: backend.updated_at,
+    has_privacy: true,
+    user_address: backend.user_address, // Preserve for client-side filtering
+  };
 }
 
 /**
@@ -183,19 +256,35 @@ async function authenticatedFetch(
 export async function initiateBridge(
   request: BridgeInitiateRequest
 ): Promise<BridgeInitiateResponse> {
-  const response = await authenticatedFetch("/bridge/initiate", {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
+  return retryAPICall(async () => {
+    try {
+      const response = await authenticatedFetch("/bridge/initiate", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      message: "Failed to initiate bridge",
-    }));
-    throw new Error(error.message || error.error || "Failed to initiate bridge");
-  }
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new HMACAuthError();
+        }
 
-  return response.json();
+        const error = await response.json().catch(() => ({
+          message: "Failed to initiate bridge",
+        }));
+        throw new APIError(
+          response.status,
+          error.message || error.error || "Failed to initiate bridge"
+        );
+      }
+
+      return response.json();
+    } catch (error) {
+      if (error instanceof HMACAuthError || error instanceof APIError) {
+        throw error;
+      }
+      throw new NetworkTimeoutError(error instanceof Error ? error : undefined);
+    }
+  }, 3);
 }
 
 /**
@@ -207,16 +296,26 @@ export async function initiateBridge(
 export async function getIntentStatus(
   intentId: string
 ): Promise<IntentStatusResponse> {
-  const response = await fetch(`${API_BASE_URL}/bridge/intent/${intentId}`);
+  return retryAPICall(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/bridge/intent/${intentId}`);
 
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error("Intent not found");
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new IntentNotFoundError(intentId);
+        }
+        throw new APIError(response.status, "Failed to fetch intent status");
+      }
+
+      const backendData: BackendIntentResponse = await response.json();
+      return normalizeIntentResponse(backendData);
+    } catch (error) {
+      if (error instanceof IntentNotFoundError || error instanceof APIError) {
+        throw error;
+      }
+      throw new NetworkTimeoutError(error instanceof Error ? error : undefined);
     }
-    throw new Error("Failed to fetch intent status");
-  }
-
-  return response.json();
+  }, 3);
 }
 
 /**
@@ -226,7 +325,7 @@ export async function getIntentStatus(
  * @param onUpdate - Callback for status updates
  * @param maxAttempts - Maximum polling attempts (default: 60)
  * @param intervalMs - Polling interval in ms (default: 5000)
- * @returns Promise<IntentStatusResponse>
+ * @returns Promise<IntentStatusResponse> - Returns last known status even if terminal state not reached
  */
 export async function pollIntentStatus(
   intentId: string,
@@ -235,9 +334,11 @@ export async function pollIntentStatus(
   intervalMs: number = 5000
 ): Promise<IntentStatusResponse> {
   const terminalStates: IntentStatus[] = ["completed", "refunded", "failed"];
+  let lastStatus: IntentStatusResponse | null = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const status = await getIntentStatus(intentId);
+    lastStatus = status;
 
     // Call update callback
     if (onUpdate) {
@@ -253,7 +354,10 @@ export async function pollIntentStatus(
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
-  throw new Error("Polling timeout: Intent did not reach terminal state");
+  // If we reach here, polling timed out but transaction is still valid
+  // Return the last known status instead of throwing an error
+  console.log("✅ Polling completed without reaching terminal state. Transaction is still processing.");
+  return lastStatus!;
 }
 
 /**
@@ -344,6 +448,7 @@ export async function listBridgeIntents(options?: {
   status?: IntentStatus;
   chain?: ChainType;
   limit?: number;
+  userAddress?: string;
 }): Promise<{
   status: string;
   count: number;
@@ -354,6 +459,7 @@ export async function listBridgeIntents(options?: {
   if (options?.status) params.append("status", options.status);
   if (options?.chain) params.append("chain", options.chain);
   if (options?.limit) params.append("limit", options.limit.toString());
+  if (options?.userAddress) params.append("user_address", options.userAddress);
 
   const queryString = params.toString();
   const url = `${API_BASE_URL}/bridge/intents${queryString ? `?${queryString}` : ""}`;
@@ -364,7 +470,18 @@ export async function listBridgeIntents(options?: {
     throw new Error("Failed to fetch bridge intents");
   }
 
-  return response.json();
+  const backendResponse: {
+    status: string;
+    count: number;
+    data: BackendIntentResponse[];
+  } = await response.json();
+
+  // Normalize all intent responses
+  return {
+    status: backendResponse.status,
+    count: backendResponse.count,
+    data: backendResponse.data.map(normalizeIntentResponse),
+  };
 }
 
 /**

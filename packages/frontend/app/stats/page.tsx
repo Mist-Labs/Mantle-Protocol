@@ -297,8 +297,15 @@ export default function StatsPage() {
             {/* Volume Over Time */}
             <Card className="border-neutral-800 bg-neutral-900">
               <CardHeader>
-                <CardTitle className="text-white">Volume Over Time</CardTitle>
-                <CardDescription className="text-neutral-400">Daily bridge volume in USD</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-white">Volume Over Time</CardTitle>
+                    <CardDescription className="text-neutral-400">Daily bridge volume in USD</CardDescription>
+                  </div>
+                  <Badge variant="outline" className="border-yellow-500/20 bg-yellow-500/10 text-yellow-500">
+                    Sample Data
+                  </Badge>
+                </div>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
@@ -325,8 +332,15 @@ export default function StatsPage() {
             {/* Bridge Time Distribution */}
             <Card className="border-neutral-800 bg-neutral-900">
               <CardHeader>
-                <CardTitle className="text-white">Bridge Time Distribution</CardTitle>
-                <CardDescription className="text-neutral-400">Settlement time ranges</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-white">Bridge Time Distribution</CardTitle>
+                    <CardDescription className="text-neutral-400">Settlement time ranges</CardDescription>
+                  </div>
+                  <Badge variant="outline" className="border-yellow-500/20 bg-yellow-500/10 text-yellow-500">
+                    Sample Data
+                  </Badge>
+                </div>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
@@ -397,8 +411,15 @@ export default function StatsPage() {
             {/* Solver Performance Table */}
             <Card className="border-neutral-800 bg-neutral-900">
               <CardHeader>
-                <CardTitle className="text-white">Top Solver Performance</CardTitle>
-                <CardDescription className="text-neutral-400">Ranked by volume handled</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-white">Top Solver Performance</CardTitle>
+                    <CardDescription className="text-neutral-400">Ranked by volume handled</CardDescription>
+                  </div>
+                  <Badge variant="outline" className="border-yellow-500/20 bg-yellow-500/10 text-yellow-500">
+                    Sample Data
+                  </Badge>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">

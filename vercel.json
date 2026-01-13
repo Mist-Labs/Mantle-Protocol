@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "yarn workspace @mantle/shadow-swap-frontend build",
+  "installCommand": "yarn install --frozen-lockfile",
+  "outputDirectory": "packages/frontend/.next",
+  "framework": "nextjs"
+}

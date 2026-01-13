@@ -112,13 +112,17 @@ export default function BridgeProgress({
   status,
   error,
 }: BridgeProgressProps) {
-  const isComplete = step === "completed"
-  const isFailed = step === "failed"
+  // Status is now coming from React Query (realtime), so trust it over step
+  const isComplete = status === "completed" || step === "completed"
+  const isFailed = status === "failed" || status === "refunded" || step === "failed"
+  const isFullyCompleted = status === "completed"
+  const isWaitingForSolver = !isFullyCompleted && !isFailed && (status === "committed" || status === "created" || status === "filled" || step === "waiting-solver")
 
   // Calculate progress
   const currentStepIndex = DISPLAY_STEPS.indexOf(step)
-  const progress =
-    currentStepIndex >= 0
+  const progress = isFullyCompleted
+    ? 100 // Show 100% when completed
+    : currentStepIndex >= 0
       ? ((currentStepIndex + 1) / DISPLAY_STEPS.length) * 100
       : 0
 
@@ -140,7 +144,13 @@ export default function BridgeProgress({
       <DialogContent className="max-h-[85vh] max-w-lg overflow-hidden border border-neutral-800 bg-neutral-900 text-white">
         <DialogHeader className="border-b border-neutral-800 pb-4">
           <DialogTitle className="text-xl font-bold">
-            {isComplete ? "Bridge Complete!" : isFailed ? "Bridge Failed" : "Processing Bridge..."}
+            {isFullyCompleted
+              ? "Bridge Complete!"
+              : isWaitingForSolver && !isFailed
+                ? "Transaction Submitted!"
+                : isFailed
+                  ? "Bridge Failed"
+                  : "Processing Bridge..."}
           </DialogTitle>
           {/* Progress Bar - moved to header */}
           <div className="mt-3">
@@ -187,6 +197,41 @@ export default function BridgeProgress({
               </div>
             </div>
           </div>
+
+          {/* Success Message - Transaction Submitted (waiting for solver) */}
+          {isWaitingForSolver && !isFailed && !error && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="rounded-lg border border-blue-500/50 bg-blue-500/10 p-4"
+            >
+              <div className="mb-2 flex items-center gap-2 font-semibold text-blue-400">
+                <Clock className="h-5 w-5 flex-shrink-0" />
+                <span>Transaction Submitted Successfully</span>
+              </div>
+              <p className="text-sm leading-relaxed text-neutral-300">
+                Your transaction is on-chain and being processed by solvers. This typically takes 10-60 seconds.
+                The modal will close automatically when complete.
+              </p>
+            </motion.div>
+          )}
+
+          {/* Success Message - Fully Complete */}
+          {isFullyCompleted && !error && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="rounded-lg border border-green-500/50 bg-green-500/10 p-4"
+            >
+              <div className="mb-2 flex items-center gap-2 font-semibold text-green-400">
+                <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
+                <span>Bridge Complete!</span>
+              </div>
+              <p className="text-sm leading-relaxed text-neutral-300">
+                Your funds have been successfully bridged and are now available on {toNetwork}.
+              </p>
+            </motion.div>
+          )}
 
           {/* Error Message */}
           {error && (

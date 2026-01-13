@@ -89,5 +89,9 @@
     "@metamask/sdk": "^0.33.1",
     "@walletconnect/ethereum-provider": "^2.21.10",
     "porto": "^0.2.37"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "yarn": ">=1.22.0"
   }
 }

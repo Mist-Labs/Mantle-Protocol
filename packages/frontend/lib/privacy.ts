@@ -161,42 +161,28 @@ export function validatePrivacyParams(params: {
 }
 
 /**
- * EIP-712 Domain for claim authorization signatures
- * This defines the signing domain for the destination chain settlement contract
+ * Generate claim authorization hash for automated claiming by relayer
+ * The relayer uses this pre-signed authorization to claim on behalf of the user
  *
- * @param chainId - Destination chain ID (11155111 for Sepolia, 5003 for Mantle Sepolia)
- * @param contractAddress - Settlement contract address on destination chain
- * @returns EIP-712 domain object
+ * @param intentId - Unique intent identifier
+ * @param nullifier - 32-byte nullifier (derived from secret)
+ * @param recipient - Recipient address on destination chain
+ * @returns 32-byte hash that needs to be signed
+ *
+ * @example
+ * const authHash = generateClaimAuthHash(intentId, nullifier, recipientAddress);
+ * const claimAuth = await wallet.signMessage({ message: { raw: authHash } });
  */
-export function getEIP712Domain(chainId: number, contractAddress: Hex) {
-  return {
-    name: "IntentSettlement",
-    version: "1",
-    chainId,
-    verifyingContract: contractAddress,
-  } as const;
+export function generateClaimAuthHash(
+  intentId: Hex,
+  nullifier: Hex,
+  recipient: Hex
+): Hex {
+  // Match the contract's authHash computation:
+  // keccak256(abi.encodePacked(intentId, nullifier, recipient))
+  const packed = `${intentId.slice(2)}${nullifier.slice(2)}${recipient.slice(2)}`;
+  return keccak256(`0x${packed}` as Hex);
 }
-
-/**
- * EIP-712 types for claim authorization
- * Defines the structure of the ClaimAuthorization message
- */
-export const CLAIM_AUTH_TYPES = [
-  { name: "intentId", type: "bytes32" },
-  { name: "recipient", type: "address" },
-  { name: "token", type: "address" },
-  { name: "amount", type: "uint256" },
-] as const;
-
-/**
- * Type definition for claim authorization message
- */
-export type ClaimAuthMessage = {
-  intentId: Hex;
-  recipient: Hex;
-  token: Hex;
-  amount: bigint;
-};
 
 /**
  * Validate claim authorization signature format
@@ -217,4 +203,71 @@ export function validateClaimAuth(signature: string): boolean {
     throw new Error("Signature must be a valid hex string");
   }
   return true;
+}
+
+/**
+ * Compute commitment using Poseidon hash contract
+ * This is the privacy-preserving commitment that goes on-chain
+ *
+ * @param secret - 32-byte secret
+ * @param nullifier - 32-byte nullifier
+ * @param amount - Amount in wei
+ * @param sourceChainId - Source chain ID
+ * @param poseidonContract - Poseidon hasher contract instance (from wagmi/viem)
+ * @returns Promise<Hex> - 32-byte commitment hash
+ *
+ * @example
+ * const commitment = await computePoseidonCommitment(
+ *   secret,
+ *   nullifier,
+ *   parseEther("1.0"),
+ *   11155111,
+ *   publicClient
+ * );
+ */
+export async function computePoseidonCommitment(
+  secret: Hex,
+  nullifier: Hex,
+  amount: bigint,
+  sourceChainId: number,
+  poseidonCall: (inputs: readonly Hex[]) => Promise<Hex>
+): Promise<Hex> {
+  // Pad amount and chainId to 32 bytes
+  const amountPadded = `0x${amount.toString(16).padStart(64, "0")}` as Hex;
+  const chainIdPadded = `0x${sourceChainId.toString(16).padStart(64, "0")}` as Hex;
+
+  console.log("🔐 Computing Poseidon commitment with inputs:", {
+    secret,
+    nullifier,
+    amount: amount.toString(),
+    amountPadded,
+    sourceChainId,
+    chainIdPadded,
+  });
+
+  // Call Poseidon contract with [secret, nullifier, amount, sourceChainId]
+  const commitment = await poseidonCall([
+    secret,
+    nullifier,
+    amountPadded,
+    chainIdPadded,
+  ]);
+
+  console.log("🔐 Poseidon contract returned commitment:", commitment);
+
+  // Validate commitment is not undefined, null, or zeros
+  if (!commitment) {
+    throw new Error("Poseidon contract returned undefined/null commitment");
+  }
+
+  if (commitment === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+    throw new Error(
+      "Poseidon contract returned all-zeros commitment. This indicates:\n" +
+      "1. The contract might not be deployed at this address\n" +
+      "2. The RPC endpoint might be returning invalid data\n" +
+      "3. The contract call is reverting silently"
+    );
+  }
+
+  return commitment;
 }

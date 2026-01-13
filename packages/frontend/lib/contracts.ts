@@ -12,16 +12,17 @@ import type { ChainType } from "./tokens";
  * Contract addresses for Ethereum Sepolia Testnet (Chain ID: 11155111)
  */
 export const ETHEREUM_CONTRACTS = {
-  intentPool: "0xA019C4fFC50b58AF6221F9EB59126630E26f3326" as Hex,
-  settlement: "0x0d632dC7786CD01712ED3CF3c6fa7F9e9C67Fa49" as Hex,
+  intentPool: "0xcb46d916522d7c6853fce2aa5f337e0a3626e263" as Hex,
+  settlement: "0x7CCC9864125143e6c530506772Eaf5595DC14897" as Hex,
+  poseidonHasher: "0x5d3efc46ddba9f083b571a64210B976E06e6d7B2" as Hex,
 } as const;
 
 /**
  * Contract addresses for Mantle Sepolia Testnet (Chain ID: 5003)
  */
 export const MANTLE_CONTRACTS = {
-  intentPool: "0x3ecB330Aa3EaE12bbc26022dE9ee140C06e3da43" as Hex,
-  settlement: "0x67eEf23fc45e149E43944100be8658c55D48f1a1" as Hex,
+  intentPool: "0x6ebcf830b855108fa44abed6ba964f2af9c34424" as Hex,
+  settlement: "0x1c4F9eBeccE31cEFe2FDe415b05184b4ea46908f" as Hex,
   poseidonHasher: "0x8EA86eD4317AF92f73E5700eB9b93A72dE62f3B1" as Hex,
 } as const;
 
@@ -53,12 +54,22 @@ export const INTENT_POOL_ABI = [
         internalType: "bytes32",
       },
       {
-        name: "token",
+        name: "sourceToken",
         type: "address",
         internalType: "address",
       },
       {
-        name: "amount",
+        name: "sourceAmount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "destToken",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "destAmount",
         type: "uint256",
         internalType: "uint256",
       },
@@ -79,6 +90,92 @@ export const INTENT_POOL_ABI = [
       },
     ],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "isTokenSupported",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "getTokenConfig",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        internalType: "struct PrivateIntentPool.TokenConfig",
+        components: [
+          {
+            name: "supported",
+            type: "bool",
+            internalType: "bool",
+          },
+          {
+            name: "minFillAmount",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "maxFillAmount",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "decimals",
+            type: "uint256",
+            internalType: "uint256",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "NATIVE_ETH",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "paused",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
   },
   {
     type: "event",
@@ -125,6 +222,32 @@ export const INTENT_POOL_ABI = [
         type: "uint256",
         indexed: false,
         internalType: "uint256",
+      },
+    ],
+  },
+] as const;
+
+/**
+ * Poseidon Hasher Contract ABI
+ * Used for generating privacy commitments
+ */
+export const POSEIDON_ABI = [
+  {
+    type: "function",
+    name: "poseidon",
+    stateMutability: "pure",
+    inputs: [
+      {
+        name: "inputs",
+        type: "bytes32[4]",
+        internalType: "bytes32[4]",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
       },
     ],
   },
