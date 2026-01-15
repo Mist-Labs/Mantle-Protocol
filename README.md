@@ -386,7 +386,7 @@ MIT License - See [LICENSE](./LICENSE) for details
 
 ## 🌐 **Links**
 
-- **Website**: coming soon
+- **Shadow swap**: [Shadow swap app](https://shadow-swaps.vercel.app/)
 - **Docs**: coming soon
 - **Discord**: coming soon
 - **Twitter**: coming soon
