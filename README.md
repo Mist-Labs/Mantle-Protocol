@@ -3,7 +3,7 @@
 
 | **Status** | **Phase 1 (Privacy Bridge MVP)** | **Network** | **Ethereum ↔ Mantle L2** |
 |-----------|-----------------------------------|-------------|---------------------------|
-| **Complexity** | 8/10 (Commitment-based Privacy) | **Repo Type** | Monorepo (Yarn Workspaces) |
+| **Complexity** | 8/10 (Commitment-based Privacy) | **Repo Type** | Monorepo |
 | **Solidity Tooling** | Foundry | **Backend** | Rust (Actix-Web) |
 
 ---
@@ -86,11 +86,11 @@ Enhance with full ZK infrastructure:
 
 | Component | Package | Description | Technology |
 |-----------|---------|-------------|------------|
-| **Smart Contracts** | `@mantle/contracts` | Intent pools, settlement, merkle verification, Poseidon hasher | Solidity (Foundry) |
-| **Frontend dApp** | `@mantle/frontend` | User interface for private bridging | Next.js, TypeScript, Ethers.js |
-| **Relayer Backend** | `@mantle/shadow-swap` | Off-chain proof generation, root syncing, settlement coordination | Rust (Actix-Web, PostgreSQL, Diesel) |
-| **Event Indexer** | `@mantle/Indexers` | Blockchain event monitoring via Goldsky webhooks | Node.js, TypeScript, BullMQ |
-| **Solver Bot** | `@mantle/solver` | Intent fulfillment and liquidity provision | Rust (Actix-Web) |
+| **Smart Contracts** | `@Mantle/contracts` | Intent pools, settlement, merkle verification, Poseidon hasher | Solidity (Foundry) |
+| **Frontend dApp** | `@Mantle/frontend` | User interface for private bridging | Next.js, TypeScript, Ethers.js |
+| **Relayer Backend** | `@Mantle/shadow-swap` | Off-chain proof generation, root syncing, settlement coordination | Rust (Actix-Web, PostgreSQL, Diesel) |
+| **Event Indexer** | `@Mantle/Indexers` | Blockchain event monitoring via Goldsky webhooks | Node.js, TypeScript, BullMQ |
+| **Solver Bot** | `@Mantle/solver` | Intent fulfillment and liquidity provision | Rust (Actix-Web) |
 
 ---
 
@@ -141,8 +141,8 @@ commitment = Poseidon(secret, nullifier, amount, destChain)
 
 ## 👩‍💻 **3. Developer Guide**
 
-This is a **monorepo** managed with **Yarn Workspaces**.  
-Run all commands from the **repo root**.
+This is a **monorepo** with multiple packages.  
+Each package can be run independently from its directory.
 
 ---
 
@@ -155,8 +155,24 @@ cd Mantle-Protocol
 ```
 
 #### Install Dependencies
+
+Each package manages its own dependencies:
+
 ```bash
-yarn install
+# Smart Contracts
+cd packages/contracts && forge install
+
+# Frontend
+cd packages/frontend && pnpm install
+
+# Indexer
+cd packages/Indexers && pnpm install
+
+# Relayer (Rust dependencies via Cargo.toml)
+cd packages/shadow-swap && cargo build
+
+# Solver (Rust dependencies via Cargo.toml)
+cd packages/solver && cargo build
 ```
 
 ---
@@ -165,13 +181,13 @@ yarn install
 
 | Action | Package | Command |
 |--------|---------|---------|
-| **Compile Contracts** | `@mantle/contracts` | `yarn workspace @mantle/contracts build` |
-| **Run Contract Tests** | `@mantle/contracts` | `yarn workspace @mantle/contracts test` |
-| **Deploy Contracts** | `@mantle/contracts` | `yarn workspace @mantle/contracts deploy` |
-| **Run Frontend** | `@mantle/frontend` | `yarn workspace @mantle/frontend dev` |
-| **Run Indexer** | `@mantle/Indexers` | `yarn workspace @mantle/Indexers start` |
-| **Run Solver** | `@mantle/solver` | `cd packages/solver && cargo run --release` |
-| **Run Relayer** | `@mantle/shadow-swap` | `cd packages/shadow-swap && cargo run --release` |
+| **Compile Contracts** | `@Mantle/contracts` | `cd packages/contracts && forge build` |
+| **Run Contract Tests** | `@Mantle/contracts` | `cd packages/contracts && ./runtests.sh` |
+| **Deploy Contracts** | `@Mantle/contracts` | `cd packages/contracts && forge script script/Deployer.s.sol` |
+| **Run Frontend** | `@Mantle/frontend` | `cd packages/frontend && pnpm run dev` |
+| **Run Indexer** | `@Mantle/Indexers` | `cd packages/Indexers && pnpm run dev` |
+| **Run Solver** | `@Mantle/solver` | `cd packages/solver && cargo run --release` |
+| **Run Relayer** | `@Mantle/shadow-swap` | `cd packages/shadow-swap && cargo run --release` |
 
 ---
 
@@ -179,17 +195,17 @@ yarn install
 
 #### **Contracts** (`.env` in `packages/contracts/`)
 ```bash
-check .env.example (coming soon)
+check .env.example 
 ```
 
 #### **Relayer** (`.env` in `packages/relayer/`)
 ```bash
-check .env.example (coming soon)
+check .env.example 
 ```
 
-#### **Indexer** (`.env` in `packages/indexer/`)
+#### **frontend** (`.env` in `packages/frontend/`)
 ```bash
-check .env.example (coming soon)
+check .env.example 
 ```
 
 ---
@@ -203,27 +219,40 @@ docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:14
 cd packages/shadow-swap && cargo run --release
 
 # Terminal 3: Start Indexer
-yarn workspace @mantle/Indexers start
+cd packages/Indexers && pnpm run dev
 
 # Terminal 4: Start Solver
 cd packages/solver && cargo run --release
 
 # Terminal 5: Start Frontend
-yarn workspace @mantle/shadow-swap dev
+cd packages/frontend && pnpm run dev
 ```
 
 ---
 
 ## 📦 **3.5. Dependency Management**
 
-⚠️ **Never run `yarn add` inside individual package folders.**  
-Always add dependencies using **workspace commands** from the repo root.
+### **Smart Contracts (Foundry)**
+```bash
+cd packages/contracts
+forge install <dependency>  # Install Foundry library
+forge update                # Update dependencies
+```
 
-| Action | Command |
-|--------|---------|
-| Add Dependency | `yarn workspace @mantle/shadow-swap add axios` |
-| Add Dev Dependency | `yarn workspace @mantle/contracts add -D solhint` |
-| Link Local Packages | Automatic after `yarn install` |
+### **Frontend & Indexer (pnpm)**
+```bash
+cd packages/frontend  # or packages/Indexers
+pnpm add <package>         # Add dependency
+pnpm add -D <package>      # Add dev dependency
+pnpm install               # Install dependencies
+```
+
+### **Rust Services (Cargo)**
+```bash
+cd packages/shadow-swap  # or packages/solver
+cargo add <crate>          # Add dependency
+cargo update               # Update dependencies
+```
 
 ---
 
@@ -232,21 +261,21 @@ Always add dependencies using **workspace commands** from the repo root.
 ### **Smart Contracts**
 ```bash
 # Unit tests
-yarn workspace @mantle/contracts test
+cd packages/contracts && ./runtests.sh
 
 # Integration tests
-yarn workspace @mantle/contracts test:integration
+cd packages/contracts && forge test --match-path test/integration/*
 
 # Gas reports
-yarn workspace @mantle/contracts test -- --gas-report
+cd packages/contracts && forge test --gas-report
 
 # Coverage
-yarn workspace @mantle/contracts coverage
+cd packages/contracts && forge coverage
 ```
 
 ### **Relayer**
 ```bash
-cd packages/relayer
+cd packages/shadow-swap
 cargo test
 cargo test -- --nocapture  # With logs
 ```
