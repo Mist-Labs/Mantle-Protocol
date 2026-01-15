@@ -53,6 +53,7 @@ Net profit: $10 - gas costs (~$3-5)
 - **Automatic reconnection** - Handles WebSocket disconnections gracefully
 - **Error recovery** - Retry logic for failed transactions
 
+**Note:** (Minimum intent amount advised for tests: $100 and above for solver to fill as profitable, as unprofitable fills are rejected).
 
 ## Prerequisites
 
